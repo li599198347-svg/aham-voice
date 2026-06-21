@@ -129,8 +129,11 @@ CRM
 ## 版本与许可
 
 - 版本与下载：[Releases](https://github.com/li599198347-svg/aham-voice/releases)
-- 变更记录：[CHANGELOG.md](CHANGELOG.md)（[Keep a Changelog](https://keepachangelog.com/zh-CN/) + [SemVer](https://semver.org/lang/zh-CN/)）
+- 变更记录：[CHANGELOG.md](CHANGELOG.md)（Keep a Changelog · SemVer）
+- 参与贡献：[CONTRIBUTING.md](CONTRIBUTING.md)
 - 许可：[MIT](LICENSE)
+
+---
 
 ## 关于 Aham
 
