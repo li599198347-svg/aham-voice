@@ -1,4 +1,4 @@
-# Changelog
+# Changelog 更新日志
 
 本项目所有重要变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 SemVer](https://semver.org/lang/zh-CN/)。
 
@@ -36,7 +36,7 @@
 
 ## [1.0.0] - 2026-06-18
 
-- 首个版本：本地离线录音转写（FunASR paraformer + VAD + 标点）、说话人分离（CAM++）、声学情绪（emotion2vec）；会议纪要与情绪语义分析走云端 DeepSeek。macOS 单机桌面应用。
+- 首个版本：本地离线录音转写（FunASR paraformer + VAD + 标点）、说话人分离（CAM++）、声学情绪（emotion2vec）；会议纪要与情绪语义分析走云端大模型（OpenAI 兼容接口，比如 DeepSeek 等）。macOS 单机桌面应用。
 
 [Unreleased]: https://github.com/li599198347-svg/aham-voice/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/li599198347-svg/aham-voice/releases/tag/v2.0.0
