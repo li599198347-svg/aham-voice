@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
 // AhamVoice frontend.
@@ -13,7 +12,7 @@ import path from "node:path";
 // proxied to the FastAPI backend on 8000 so the same axios client works in
 // dev and prod.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

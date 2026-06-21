@@ -1,5 +1,9 @@
 # Aham Voice — 单机 macOS 录音转写与会议纪要
 
+[![License](https://img.shields.io/github/license/li599198347-svg/aham-voice)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/li599198347-svg/aham-voice)](https://github.com/li599198347-svg/aham-voice/releases/latest)
+[![CHANGELOG](https://img.shields.io/badge/changelog-Keep%20a%20Changelog-fe7d37)](CHANGELOG.md)
+
 ![Aham Voice — 录音转写与会议纪要](assets/social-preview.png)
 
 > aham 系列 · 本地优先 · 自带 Key。（应用包与数据目录仍名 `AhamVoice`，为构建产物标识。）
@@ -23,9 +27,46 @@ Aham 来自 *aha moment*。每个工具只把一件事做利落。
 | [Aham Voice](https://github.com/li599198347-svg/aham-voice) | 录音转写与会议纪要（macOS）——录一段会，纪要已经写好 |
 | [Aham PPT](https://github.com/li599198347-svg/aham-ppt) | 咨询级 AI PPT 制作技能——丢一堆素材，幻灯片出来了 |
 
+## 预览
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/shots/detail.png" alt="录音详情"></td>
+    <td width="50%"><img src="assets/shots/transcript.png" alt="逐句转写"></td>
+  </tr>
+  <tr>
+    <td align="center">录音详情 · 波形播放器 · 说话人卡</td>
+    <td align="center">逐句转写 · 用形状区分说话人</td>
+  </tr>
+  <tr>
+    <td><img src="assets/shots/summary.png" alt="会议纪要"></td>
+    <td><img src="assets/shots/library.png" alt="录音库"></td>
+  </tr>
+  <tr>
+    <td align="center">AI 会议纪要</td>
+    <td align="center">录音库</td>
+  </tr>
+  <tr>
+    <td><img src="assets/shots/settings.png" alt="设置"></td>
+    <td><img src="assets/shots/upload.png" alt="新增录音"></td>
+  </tr>
+  <tr>
+    <td align="center">设置 · 任意 OpenAI 兼容接口</td>
+    <td align="center">新增录音</td>
+  </tr>
+</table>
+
 ## 下载
 
-预编译安装包发布中。当前可按 [DEPLOY.md](DEPLOY.md) 从源码构建运行。
+到 [Releases](https://github.com/li599198347-svg/aham-voice/releases/latest) 下载最新版（**仅 Apple Silicon**）。DMG 内置全部模型、体积较大，按 GitHub 单文件上限**分卷上传**——下载全部分卷后在同一目录合并：
+
+```bash
+cat AhamVoice-v2.0.0.dmg.* > "Aham Voice.dmg"
+```
+
+双击 DMG → 拖 **Aham Voice** 到「应用程序」→ 首次运行解除隔离（见下文「打包」）→ 在「设置」页填 OpenAI 兼容 API Key 即可开箱使用。
+
+也可按 [DEPLOY.md](DEPLOY.md) 从源码构建运行。
 
 ## 架构
 
@@ -70,13 +111,15 @@ xattr -dr com.apple.quarantine /Applications/AhamVoice.app
 
 ## 热词 txt 导入格式
 
-`#` 开头与空行忽略；其余每行是一个热词，两种写法：
+每行一个热词，空行忽略。每个词只能是**中文 / 字母 / 数字**（不含空格或标点符号）。导入后自动去重（不区分大小写）、按拼音排序，点「保存」生效。
 
-- 纯词：`帕萨思`
-- 扩展（英文逗号分隔，最多 4 段）：`词,别名(多个用分号;隔),类型,权重`
-  例：`金蝶接口,金蝶API;金蝶系统,产品,9`
+```
+CRM
+金蝶接口
+会议纪要
+```
 
-`词` 必填，其余可选（默认 类型=术语、权重=8）。已存在的词（不区分大小写）与文件内重复项自动跳过。
+在「热词」页点「导入 txt」选文件即可；也可直接在富文本框里用顿号「、」分隔手动维护。
 
 ## 主要 API
 

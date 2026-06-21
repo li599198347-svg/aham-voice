@@ -1,8 +1,7 @@
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { Icon, type IconName } from "@/components/Icon";
-import { useAuth } from "@/context/auth";
 import { cn } from "@/utils/cn";
-import { Avatar } from "@/components/Avatar";
 
 interface NavItemDef {
   to: string;
@@ -11,6 +10,10 @@ interface NavItemDef {
   count?: number | string;
   badge?: string;
   end?: boolean;
+  // Custom active matcher. When provided, overrides NavLink's default/`end`
+  // matching — used so 录音库 lights up on the list + detail pages but NOT on
+  // /app/recordings/new (which 新增录音 owns exclusively).
+  isActive?: (pathname: string) => boolean;
 }
 
 interface NavSectionDef {
@@ -23,9 +26,20 @@ function memberSections(): NavSectionDef[] {
     {
       title: "AI 工作台",
       items: [
-        { to: "/app/recordings/new", icon: "house", label: "首页" },
-        { to: "/app/recordings", icon: "audio-lines", label: "录音库", end: true },
-        { to: "/app/tasks", icon: "list-checks", label: "任务进度" },
+        { to: "/app/recordings/new", icon: "plus", label: "新增录音", end: true },
+        {
+          to: "/app/recordings",
+          icon: "audio-lines",
+          label: "录音库",
+          // List + detail (/app/recordings, /app/recordings/:id) but never /new.
+          isActive: (pathname) =>
+            pathname === "/app/recordings" ||
+            (pathname.startsWith("/app/recordings/") &&
+              pathname !== "/app/recordings/new"),
+          // end → 内置 aria-current 仅精确匹配 /app/recordings；视觉高亮仍由
+          // 上面的 isActive 控制（详情页照常点亮，/new 不再重复 aria-current）。
+          end: true,
+        },
       ],
     },
     {
@@ -34,10 +48,6 @@ function memberSections(): NavSectionDef[] {
         { to: "/app/hotwords", icon: "spell-check", label: "热词" },
         { to: "/app/voiceprints", icon: "mic", label: "声纹" },
       ],
-    },
-    {
-      title: "系统",
-      items: [{ to: "/app/settings", icon: "settings", label: "设置" }],
     },
   ];
 }
@@ -50,9 +60,9 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
     admin: "管理控制台",
     recordings: "录音库",
     new: "上传录音",
-    tasks: "任务进度",
     hotwords: "热词",
     voiceprints: "声纹",
+    settings: "设置",
     overview: "总览",
     users: "用户",
     teams: "团队",
@@ -98,89 +108,153 @@ function buildBreadcrumb(pathname: string): { href?: string; label: string }[] {
 }
 
 export function AppShell() {
-  const { user } = useAuth();
   const location = useLocation();
   const sections = memberSections();
   const crumbs = buildBreadcrumb(location.pathname);
 
+  // Mobile drawer state: on narrow viewports the sidebar collapses off-canvas
+  // and is toggled by the navbar hamburger. CSS (.sidebar.is-open) handles the
+  // slide-in; the scrim only renders while open. The drawer auto-closes on
+  // route change so navigating from within it dismisses the overlay.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [location.pathname]);
+
+  // Esc closes the drawer when it's open.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
+
   return (
-    <div className="app-shell">
+    <div className="shell">
       <a className="skip-link" href="#main">
         跳到主内容
       </a>
 
-      <aside className="app-shell__sidebar">
-        <div className="app-shell__brand">
-          <span className="app-shell__brand-glyph">A</span>
-          <span>
-            AhamVoice <em>· 录音转写</em>
-          </span>
+      {drawerOpen && (
+        <div
+          className="sidebar-scrim"
+          onClick={() => setDrawerOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={cn("sidebar", drawerOpen && "is-open")}
+        aria-label="主导航"
+      >
+        <div className="lockup sidebar__brand">
+          <img
+            src="/favicon.svg"
+            alt="Aham Voice"
+            width={30}
+            height={30}
+            className="lk-icon"
+            // favicon.svg already carries its own rounded-square gradient, so
+            // clear the .lk-icon accent fill and let the artwork show through.
+            style={{ background: "transparent", borderRadius: "var(--r-md)" }}
+          />
+          <div className="lk-body">
+            <span className="lk-title">Aham Voice</span>
+          </div>
         </div>
-        <nav className="app-shell__sidebar-nav" aria-label="主导航">
+
+        <nav className="sidebar__nav">
           {sections.map((section) => (
-            <div className="nav-section" key={section.title}>
-              <div className="nav-section__title">{section.title}</div>
+            <div className="nav-group" key={section.title}>
+              <div className="nav-grouptitle">{section.title}</div>
               {section.items.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
                   end={item.end}
                   className={({ isActive }) =>
-                    cn("nav-item", isActive && "is-active")
+                    cn(
+                      "nav-item",
+                      (item.isActive ? item.isActive(location.pathname) : isActive) &&
+                        "nav-item--on",
+                    )
                   }
                 >
-                  <Icon name={item.icon} size={16} className="nav-item__icon" />
+                  <Icon name={item.icon} size={18} className="ico" />
                   <span className="nav-item__label">{item.label}</span>
-                  {item.count != null && (
-                    <span className="nav-item__count">{item.count}</span>
-                  )}
+                  {item.count != null && <span className="badge">{item.count}</span>}
+                  {item.badge && <span className="badge">{item.badge}</span>}
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
-        <div className="app-shell__account">
-          <Avatar name={user?.name} size="md" className="app-shell__account-avatar" />
-          <span className="app-shell__account-name">
-            {user?.name ?? "本机用户"}
-            <span className="app-shell__account-role">本机 · 单用户</span>
-          </span>
+
+        <div className="sidebar__foot" style={{ marginBlockStart: "auto" }}>
+          <NavLink
+            to="/app/settings"
+            className={({ isActive }) => cn("nav-item", "app-settings-link", isActive && "nav-item--on")}
+          >
+            <Icon name="settings" size={18} className="ico" />
+            <span className="nav-item__label">设置</span>
+          </NavLink>
         </div>
       </aside>
 
-      <header className="app-shell__topbar">
-        <nav className="breadcrumb app-shell__topbar-breadcrumb" aria-label="位置">
-          {crumbs.map((crumb, idx) => (
-            <span key={`${crumb.label}-${idx}`}>
-              {idx > 0 && <span className="breadcrumb__sep">/</span>}
-              {crumb.href ? (
-                <NavLink to={crumb.href}>{crumb.label}</NavLink>
-              ) : (
-                <span className="breadcrumb__current">{crumb.label}</span>
-              )}
-            </span>
-          ))}
-        </nav>
-        <div className="app-shell__topbar-utils">
-          <button type="button" aria-label="搜索">
-            <Icon name="search" size={16} />
-          </button>
-          <button type="button" aria-label="通知">
-            <Icon name="bell" size={16} />
-          </button>
-          <button
-            type="button"
-            aria-label="主题"
-            onClick={() => document.documentElement.classList.toggle("dark")}
-          >
-            <Icon name="sun" size={16} />
-          </button>
-        </div>
-      </header>
+      <div className="col">
+        <header className="navbar">
+          <div className="container container--content navbar__inner">
+            <button
+              type="button"
+              className="icon-btn navbar__menu"
+              aria-label="打开导航菜单"
+              aria-expanded={drawerOpen}
+              onClick={() => setDrawerOpen((v) => !v)}
+            >
+              <Icon name="menu" size={18} />
+            </button>
+            <nav className="crumb" aria-label="位置">
+              {crumbs.map((crumb, idx) => (
+                <span key={`${crumb.label}-${idx}`} className="row" style={{ gap: "var(--s2)" }}>
+                  {idx > 0 && <span className="sep">/</span>}
+                  {crumb.href ? (
+                    <NavLink to={crumb.href}>{crumb.label}</NavLink>
+                  ) : (
+                    <span className="here">{crumb.label}</span>
+                  )}
+                </span>
+              ))}
+            </nav>
+            <div className="nav-actions">
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="主题"
+              onClick={() => {
+                const root = document.documentElement;
+                // Resolve the currently-effective theme: explicit data-theme wins,
+                // otherwise fall back to the system preference.
+                const current =
+                  root.getAttribute("data-theme") ??
+                  (window.matchMedia("(prefers-color-scheme: dark)").matches
+                    ? "dark"
+                    : "light");
+                root.setAttribute("data-theme", current === "dark" ? "light" : "dark");
+              }}
+            >
+              <Icon name="sun" size={18} />
+            </button>
+            </div>
+          </div>
+        </header>
 
-      <main className="app-shell__body" id="main">
-        <Outlet />
-      </main>
+        <main className="fill track-web" id="main">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

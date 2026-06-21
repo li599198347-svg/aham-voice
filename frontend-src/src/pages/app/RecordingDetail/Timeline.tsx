@@ -6,6 +6,16 @@ import { EMOTION_KEY } from "./Preview";
 
 type Tone = "moss" | "accent" | "rust" | "amber" | "muted";
 
+// Timeline dot semantics use the AA-aligned --ok/--warn/--risk naming; the
+// event model still speaks the legacy tone vocabulary, so map at render time.
+const TONE_CLASS: Record<Tone, string> = {
+  moss: "ok",
+  rust: "risk",
+  amber: "warn",
+  accent: "accent",
+  muted: "muted",
+};
+
 interface ArtifactRef {
   type: string;      // "MD"
   filename: string;  // e.g. "summary-v1.md", "transcript.md"
@@ -18,7 +28,7 @@ interface TimelineEvent {
   title: string;
   detail?: string;
   tone: Tone;
-  /** When set, renders as a clickable .msg-attachment doc card instead of
+  /** When set, renders as a clickable .attachment doc card instead of
    *  plain text. The card lets the user "open" the artifact in the rail. */
   artifact?: ArtifactRef;
   /** Inline progress bar for tasks that are currently running. */
@@ -237,31 +247,27 @@ export function Timeline(props: TimelineProps) {
   const currentLabel = donePct >= 100 ? "已完成" : currentEvent ? currentEvent.title : "处理中";
 
   return (
-    <section className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h3 style={{ fontSize: "var(--text-base)", fontWeight: "var(--weight-semibold)", margin: 0 }}>
-          录音处理时间线
-        </h3>
-        <span className="meta" style={{ fontSize: "var(--text-xs)", color: "var(--fg-subtle)" }}>
-          {stagesDone}/2 阶段 · {donePct}%
-        </span>
+    <section className="card stack-card">
+      <header className="card__head" style={{ marginBottom: 0 }}>
+        <span className="ttl" style={{ fontSize: "var(--text-base)" }}>录音处理时间线</span>
+        <span className="kind text-mono">{stagesDone}/2 阶段 · {donePct}%</span>
       </header>
 
-      <div className={cn("task", donePct >= 100 && "is-done")} style={{ border: 0, padding: 0, background: "transparent" }}>
-        <div className="task__head">
-          <span className="task__name">整体进度</span>
-          <span className="task__step">{donePct}%</span>
+      <div className="field">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <span className="text-caption">整体进度</span>
+          <span className="text-caption text-mono">{donePct}%</span>
         </div>
-        <div className="task__bar">
-          <div className="task__fill" style={{ width: `${donePct}%` }} />
+        <div className="progress">
+          <span className="progress__bar" style={{ width: `${donePct}%` }} />
         </div>
       </div>
 
-      <p className="meta" style={{ fontSize: "var(--text-xs)", color: "var(--fg-subtle)", margin: 0 }}>
+      <p className="text-caption" style={{ margin: 0 }}>
         当前：{currentLabel}
       </p>
 
-      <ol className="nv-timeline" style={{ marginTop: "var(--space-2)" }}>
+      <ol className="timeline" style={{ listStyle: "none", margin: 0 }}>
         {events.map((event) => {
           const isActive = !!event.artifact && !!props.activePreviewKey && (
             (event.id.startsWith("summary:") && event.id === `summary:${props.activePreviewKey.split(":")[1]}`) ||
@@ -271,77 +277,49 @@ export function Timeline(props: TimelineProps) {
           return (
             <li
               key={event.id}
-              className={cn("nv-timeline__item", `nv-timeline__item--${event.tone}`)}
+              className={cn("tl-item", `tl-item--${TONE_CLASS[event.tone]}`)}
             >
-              <div className="nv-timeline__rail">
-                <span className="nv-timeline__dot" aria-hidden />
-              </div>
-              <div className="nv-timeline__content">
-                <p className="nv-timeline__title">{event.title}</p>
-                <p className="nv-timeline__when">{formatRelative(event.at)}</p>
-                {event.detail && <p className="nv-timeline__detail">{event.detail}</p>}
-                {event.task && event.task.state === "running" && (
-                  <div
-                    className={cn("task", event.task.isStale && "is-indeterminate")}
-                    style={{ marginTop: "var(--space-2)", border: 0, padding: 0, background: "transparent" }}
-                  >
-                    <div className="task__bar">
-                      <div className="task__fill" style={{ width: `${event.task.progress}%` }} />
-                    </div>
-                  </div>
-                )}
-                {event.artifact && (
-                  <button
-                    type="button"
-                    className={cn("msg-attachment", isActive && "is-active")}
-                    onClick={event.onClick}
-                    style={{
-                      appearance: "none",
-                      width: "100%",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      marginTop: "var(--space-2)",
-                      font: "inherit",
-                      color: "inherit",
-                      background: isActive ? "var(--accent-soft)" : "var(--bg-canvas)",
-                      borderColor: isActive ? "var(--accent-default)" : undefined,
-                    }}
-                  >
-                    <span className="msg-attachment__type">{event.artifact.type}</span>
-                    <span className="msg-attachment__body">
-                      <span className="msg-attachment__name">{event.artifact.filename}</span>
-                      <span className="msg-attachment__meta">
-                        <span>{event.artifact.meta}</span>
-                      </span>
+              <p className="tl-title">{event.title}</p>
+              <p className="tl-time">{formatRelative(event.at)}</p>
+              {event.detail && <p className="tl-detail">{event.detail}</p>}
+              {event.task && event.task.state === "running" && (
+                <div
+                  className={cn("progress", event.task.isStale && "is-indeterminate")}
+                  style={{ marginTop: "var(--s2)" }}
+                >
+                  <span className="progress__bar" style={{ width: `${event.task.progress}%` }} />
+                </div>
+              )}
+              {event.artifact && (
+                <button
+                  type="button"
+                  className={cn("attachment", "attachment--button", isActive && "is-active")}
+                  onClick={event.onClick}
+                  style={{ marginTop: "var(--s2)" }}
+                >
+                  <span className="attachment__type">{event.artifact.type}</span>
+                  <span className="attachment__body">
+                    <span className="attachment__name">{event.artifact.filename}</span>
+                    <span className="attachment__meta">
+                      <span>{event.artifact.meta}</span>
                     </span>
-                    <span className="msg-attachment__actions">
-                      <span>{isActive ? "正在预览" : "预览 →"}</span>
-                    </span>
-                  </button>
-                )}
-                {!event.artifact && event.onClick && (
-                  <button
-                    type="button"
-                    disabled={event.actionDisabled}
-                    onClick={event.actionDisabled ? undefined : event.onClick}
-                    style={{
-                      appearance: "none",
-                      background: "transparent",
-                      border: "1px solid var(--border-default)",
-                      borderRadius: "var(--radius-sm)",
-                      padding: "var(--space-1) var(--space-3)",
-                      marginTop: "var(--space-2)",
-                      font: "inherit",
-                      fontSize: "var(--text-xs)",
-                      color: "var(--fg-default)",
-                      cursor: event.actionDisabled ? "default" : "pointer",
-                      opacity: event.actionDisabled ? 0.6 : 1,
-                    }}
-                  >
-                    {event.actionLabel ?? "打开 →"}
-                  </button>
-                )}
-              </div>
+                  </span>
+                  <span className="attachment__actions">
+                    <span>{isActive ? "正在预览" : "预览 →"}</span>
+                  </span>
+                </button>
+              )}
+              {!event.artifact && event.onClick && (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  disabled={event.actionDisabled}
+                  onClick={event.actionDisabled ? undefined : event.onClick}
+                  style={{ marginTop: "var(--s2)" }}
+                >
+                  {event.actionLabel ?? "打开 →"}
+                </button>
+              )}
             </li>
           );
         })}

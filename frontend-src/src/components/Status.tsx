@@ -25,13 +25,15 @@ export function Status({
     <span
       className={cn(
         "status",
-        tone === "accent" && "status--accent",
-        tone === "moss" && "status--moss",
-        tone === "amber" && "status--amber",
-        tone === "rust" && "status--rust",
-        tone === "slate" && "status--slate",
+        // tone → official status vocabulary
+        tone === "accent" && "status--active",
+        tone === "slate" && "status--active",
+        tone === "moss" && "status--ok",
+        tone === "amber" && "status--warn",
+        tone === "rust" && "status--risk",
         tone === "muted" && "status--muted",
-        tone === "faint" && "status--faint",
+        tone === "faint" && "status--muted",
+        // neutral → no modifier (default --ink-3 dot)
         className,
       )}
     >

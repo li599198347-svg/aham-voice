@@ -117,15 +117,56 @@ def save_user_config(updates: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def get_deepseek_config() -> tuple[str, str, str]:
-    """Return (api_key, api_base, model): env wins, then config.json, then default."""
+DEFAULT_LLM_API_BASE = "https://api.deepseek.com"
+DEFAULT_LLM_MODEL = "deepseek-v4-pro"
+
+
+def get_llm_config() -> tuple[str, str, str]:
+    """Return (api_key, api_base, model) for any OpenAI-compatible LLM endpoint.
+
+    Reading priority (each field independently): env -> config.json -> default.
+    Both the new generic keys and the legacy DeepSeek keys are honoured so that
+    existing config.json / environment setups keep working unchanged. The new
+    generic keys win over the legacy ones when both are present.
+    """
     cfg = load_user_config()
-    api_key = (os.environ.get("DEEPSEEK_API_KEY") or cfg.get("deepseek_api_key") or "").strip()
+    api_key = (
+        os.environ.get("LLM_API_KEY")
+        or os.environ.get("DEEPSEEK_API_KEY")
+        or cfg.get("llm_api_key")
+        or cfg.get("deepseek_api_key")
+        or ""
+    ).strip()
     base = (
-        os.environ.get("DEEPSEEK_API_BASE") or cfg.get("deepseek_api_base") or "https://api.deepseek.com"
+        os.environ.get("LLM_API_BASE")
+        or os.environ.get("DEEPSEEK_API_BASE")
+        or cfg.get("llm_api_base")
+        or cfg.get("deepseek_api_base")
+        or DEFAULT_LLM_API_BASE
     ).rstrip("/")
-    model = (os.environ.get("DEEPSEEK_MODEL") or cfg.get("deepseek_model") or "deepseek-v4-pro").strip()
+    model = (
+        os.environ.get("LLM_MODEL")
+        or os.environ.get("DEEPSEEK_MODEL")
+        or cfg.get("llm_model")
+        or cfg.get("deepseek_model")
+        or DEFAULT_LLM_MODEL
+    ).strip()
     return api_key, base, model
+
+
+def get_llm_provider() -> str:
+    """Optional provider hint (free-form), only used for display in settings."""
+    cfg = load_user_config()
+    return (
+        os.environ.get("LLM_PROVIDER")
+        or cfg.get("llm_provider")
+        or ""
+    ).strip()
+
+
+# Thin backward-compatible alias so any remaining/older call sites keep working.
+def get_deepseek_config() -> tuple[str, str, str]:
+    return get_llm_config()
 
 
 app = FastAPI(title="AhamVoice Local API", version="0.1.0")
@@ -340,6 +381,7 @@ def ensure_schema() -> None:
                 duration_label text not null,
                 asr_status text not null default 'pending',
                 summary_status text not null default 'pending',
+                speaker_count integer,
                 crm_sync_status text not null default 'pending',
                 crm_sync_error text,
                 crm_synced_at text,
@@ -469,6 +511,7 @@ def ensure_schema() -> None:
             create table if not exists speaker_profiles (
                 id text primary key,
                 name text not null,
+                note text,
                 owner_id text,
                 team_id text,
                 scope text not null default 'team',
@@ -538,6 +581,7 @@ def ensure_schema() -> None:
             "crm_relation_target_name": "text",
             "crm_sync_response": "text not null default '{}'",
             "expected_speakers": "integer",
+            "speaker_count": "integer",
         }
         for column, definition in recording_migrations.items():
             if column not in recording_cols:
@@ -662,28 +706,10 @@ def ensure_schema() -> None:
         if "scope" not in profile_cols:
             conn.execute("alter table speaker_profiles add column scope text not null default 'team'")
             conn.execute("update speaker_profiles set scope = case when team_id is null then 'global' else 'team' end")
-        if not conn.execute("select 1 from teams limit 1").fetchone():
-            conn.executemany(
-                "insert into teams(id,name,dept,manager_ids) values(?,?,?,?)",
-                [
-                    ("t-sales-1", "销售一组", "销售部", json.dumps(["u-lin"], ensure_ascii=False)),
-                    ("t-project-1", "项目调研组", "交付部", json.dumps([], ensure_ascii=False)),
-                ],
-            )
-        if not conn.execute("select 1 from users limit 1").fetchone():
-            seed_users = [
-                ("u-chen", "陈思源", "chen@example.local", "销售部", "member", "t-sales-1", "[]", "active", now()),
-                ("u-lin", "林伟", "lin@example.local", "销售部", "manager", "t-sales-1", '["t-sales-1"]', "active", now()),
-                ("u-han", "韩雪", "han@example.local", "运营管理", "admin", None, "[]", "active", now()),
-                ("u-zhao", "赵敏", "zhao@example.local", "交付部", "member", "t-project-1", "[]", "active", now()),
-            ]
-            conn.executemany(
-                """
-                insert into users(id,name,email,dept,role,team_id,managed_team_ids,status,last_active_at)
-                values(?,?,?,?,?,?,?,?,?)
-                """,
-                seed_users,
-            )
+        if "note" not in profile_cols:
+            conn.execute("alter table speaker_profiles add column note text")
+        # Single-user desktop build: no demo teams/users are seeded. The lone
+        # real account ("administrator") is created below.
         default_hash = hash_password(initial_password())
         timestamp = now()
         conn.execute(
@@ -744,7 +770,6 @@ def ensure_schema() -> None:
                 values(?,?,?,?,?,?,?,?,?)
                 """,
                 [
-                    (str(uuid.uuid4()), "name", "李成豹", "manager", "[]", 1, 10, timestamp, timestamp),
                     (str(uuid.uuid4()), "local_username", "administrator", "admin", "[]", 1, 1, timestamp, timestamp),
                 ],
             )
@@ -1109,6 +1134,18 @@ def recording_payload(conn: sqlite3.Connection, rec: dict[str, Any]) -> dict[str
     owner = rowdict(conn.execute("select name from users where id = ?", (rec["owner_id"],)).fetchone())
     payload = dict(rec)
     payload["owner_name"] = owner["name"] if owner else rec["owner_id"]
+    # speaker_count: prefer a live count over distinct speakers in the transcript
+    # (so historical recordings without the stored column still report correctly),
+    # falling back to the stored value when no segments exist yet.
+    distinct = conn.execute(
+        "select count(distinct coalesce(speaker_name, speaker)) from transcript_segments where recording_id = ?",
+        (rec["id"],),
+    ).fetchone()[0]
+    if distinct:
+        payload["speaker_count"] = int(distinct)
+    else:
+        stored = rec.get("speaker_count")
+        payload["speaker_count"] = int(stored) if stored is not None else None
     return payload
 
 
@@ -2078,12 +2115,12 @@ def transcribe_recording(recording_id: str, user: dict[str, Any], segment_second
                 inserted += 1
             if inserted == 0:
                 raise RuntimeError("ASR returned no usable transcript segments")
+            spk_count = len({row.get("spk", "unknown") for row in sentence_info})
             conn.execute(
-                "update recordings set asr_status = ?, updated_at = ? where id = ?",
-                ("done", now(), recording_id),
+                "update recordings set asr_status = ?, speaker_count = ?, updated_at = ? where id = ?",
+                ("done", spk_count, now(), recording_id),
             )
             update_task(conn, task_id, "done", 100)
-            spk_count = len({row.get("spk", "unknown") for row in sentence_info})
             audit(
                 conn,
                 user,
@@ -2269,13 +2306,13 @@ async def _deepseek_post_with_retry(
             await asyncio.sleep(2 * (attempt + 1))
             continue
         break
-    raise RuntimeError(f"DeepSeek request failed: {last_error}")
+    raise RuntimeError(f"大模型请求失败: {last_error}")
 
 
 async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, str]:
-    api_key, base, model = get_deepseek_config()
+    api_key, base, model = get_llm_config()
     if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+        raise RuntimeError("大模型 API Key 未配置")
 
     chunk_chars = env_int("AHAMVOICE_SUMMARY_CHUNK_CHARS", 18000, 8000, 28000)
     chunks = [text[i : i + chunk_chars] for i in range(0, len(text), chunk_chars)] or [""]
@@ -2367,9 +2404,9 @@ async def call_deepseek_summary(text: str, rec: dict[str, Any]) -> tuple[str, st
 
 
 async def call_deepseek_revision(instruction: str, base_summary: str, transcript: str, rec: dict[str, Any]) -> tuple[str, str]:
-    api_key, base, model = get_deepseek_config()
+    api_key, base, model = get_llm_config()
     if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+        raise RuntimeError("大模型 API Key 未配置")
 
     if len(transcript) <= 26000:
         transcript_context = transcript
@@ -2741,9 +2778,9 @@ def emotion_annotated_transcript(conn: sqlite3.Connection, recording_id: str, pe
 
 
 def call_deepseek_emotion(annotated_transcript: str, rec: dict[str, Any], acoustic_md: str) -> tuple[str, str]:
-    api_key, base, model = get_deepseek_config()
+    api_key, base, model = get_llm_config()
     if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+        raise RuntimeError("大模型 API Key 未配置")
     transcript = annotated_transcript
     if len(transcript) > 48000:
         transcript = transcript[:26000] + "\n\n[中间过长省略，仅保留首尾]\n\n" + transcript[-18000:]
@@ -2989,8 +3026,16 @@ def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
 
 
 def _settings_view() -> dict[str, Any]:
-    api_key, base, model = get_deepseek_config()
+    api_key, base, model = get_llm_config()
+    provider = get_llm_provider()
     return {
+        # Generic LLM fields (preferred).
+        "llm_configured": bool(api_key),
+        "llm_api_base": base,
+        "llm_model": model,
+        "llm_provider": provider,
+        # Legacy DeepSeek aliases retained so older frontend code / caches keep
+        # working. They mirror the generic values above.
         "deepseek_configured": bool(api_key),
         "deepseek_api_base": base,
         "deepseek_model": model,
@@ -3008,16 +3053,120 @@ def patch_settings(
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {}
-    # An empty string explicitly clears the stored value.
-    if "deepseek_api_key" in payload:
-        updates["deepseek_api_key"] = (payload.get("deepseek_api_key") or "").strip()
-    if "deepseek_api_base" in payload:
-        updates["deepseek_api_base"] = (payload.get("deepseek_api_base") or "").strip() or "https://api.deepseek.com"
-    if "deepseek_model" in payload:
-        updates["deepseek_model"] = (payload.get("deepseek_model") or "").strip() or "deepseek-v4-pro"
+    # An empty string explicitly clears the stored value. Both the generic
+    # `llm_*` keys and the legacy `deepseek_*` keys are accepted; the generic
+    # ones take precedence when both appear in the same request.
+
+    def _pick(*keys: str) -> str | None:
+        for key in keys:
+            if key in payload:
+                return (payload.get(key) or "").strip()
+        return None
+
+    api_key = _pick("llm_api_key", "deepseek_api_key")
+    if api_key is not None:
+        updates["llm_api_key"] = api_key
+        updates["deepseek_api_key"] = api_key  # keep legacy key in sync
+
+    api_base = _pick("llm_api_base", "deepseek_api_base")
+    if api_base is not None:
+        api_base = api_base or DEFAULT_LLM_API_BASE
+        updates["llm_api_base"] = api_base
+        updates["deepseek_api_base"] = api_base
+
+    model = _pick("llm_model", "deepseek_model")
+    if model is not None:
+        model = model or DEFAULT_LLM_MODEL
+        updates["llm_model"] = model
+        updates["deepseek_model"] = model
+
+    if "llm_provider" in payload:
+        updates["llm_provider"] = (payload.get("llm_provider") or "").strip()
+
     if updates:
         save_user_config(updates)
     return _settings_view()
+
+
+@app.post("/api/settings/test")
+async def test_settings(
+    payload: dict[str, Any] | None = Body(default=None),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """Probe the configured (or temporarily overridden) LLM endpoint.
+
+    Sends a minimal OpenAI-compatible chat-completions request so the user can
+    confirm the key/base/model actually work before relying on them for
+    summaries. An optional JSON body may override the stored config field by
+    field — handy when the user has typed a key/base/model but not saved yet:
+
+        {"api_key"?: str, "api_base"?: str, "model"?: str}
+
+    Returns `{ok, model, latency_ms, error?}`. Errors are friendly Chinese
+    strings; full response bodies, stack traces and the key are never leaked.
+    """
+    body = payload if isinstance(payload, dict) else {}
+    api_key, base, model = get_llm_config()
+
+    # Optional per-field overrides for the un-saved case.
+    if isinstance(body.get("api_key"), str) and body["api_key"].strip():
+        api_key = body["api_key"].strip()
+    if isinstance(body.get("api_base"), str) and body["api_base"].strip():
+        base = body["api_base"].strip().rstrip("/")
+    if isinstance(body.get("model"), str) and body["model"].strip():
+        model = body["model"].strip()
+
+    if not api_key:
+        return {"ok": False, "model": model, "latency_ms": 0, "error": "未配置 API Key，请先填写并保存。"}
+
+    chat_url = f"{base}/chat/completions"
+    request_body = {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+            res = await client.post(chat_url, headers=headers, json=request_body)
+    except httpx.TimeoutException:
+        return {"ok": False, "model": model, "latency_ms": int((time.monotonic() - started) * 1000),
+                "error": "连接超时（15 秒内未响应），请检查 API Base 地址与网络。"}
+    except httpx.RequestError as exc:
+        # ConnectError / network / DNS — don't echo the raw exception text (it can
+        # carry the host/url); a short type name is enough to differentiate.
+        return {"ok": False, "model": model, "latency_ms": int((time.monotonic() - started) * 1000),
+                "error": f"网络连接失败（{type(exc).__name__}），请检查 API Base 地址与网络。"}
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+
+    if res.status_code < 400:
+        # Some endpoints echo the served model name; fall back to the requested one.
+        served = model
+        try:
+            data = res.json()
+            if isinstance(data, dict) and isinstance(data.get("model"), str) and data["model"].strip():
+                served = data["model"].strip()
+        except Exception:
+            pass
+        return {"ok": True, "model": served, "latency_ms": latency_ms}
+
+    status = res.status_code
+    if status in (401, 403):
+        error = "鉴权失败（API Key 无效或无权限），请检查 Key 是否正确。"
+    elif status in (400, 404):
+        # 404 = unknown route/model on most gateways; 400 often = bad model name.
+        error = f"模型不存在或请求被拒绝（HTTP {status}），请检查模型名称与 API Base。"
+    elif status == 429:
+        error = "请求过于频繁或额度不足（HTTP 429），请稍后再试或检查账户额度。"
+    else:
+        # Trim the upstream body to a short, key-free reason hint.
+        reason = (res.text or "").strip().replace("\n", " ")[:120]
+        error = f"请求失败（HTTP {status}）{('：' + reason) if reason else ''}"
+    return {"ok": False, "model": model, "latency_ms": latency_ms, "error": error}
 
 
 SEED_ADMIN_USERNAME = "administrator"
@@ -3281,6 +3430,29 @@ def recording_detail(recording_id: str, user: dict[str, Any] = Depends(current_u
         }
 
 
+@app.delete("/api/recordings/{recording_id}")
+def delete_recording(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with db() as conn:
+        rec = can_access_recording(conn, recording_id, user)
+        file_path = rec.get("file_path")
+        # 先拿磁盘路径，再在同一事务里级联删除所有关联记录。
+        conn.execute("delete from transcript_segments where recording_id = ?", (recording_id,))
+        conn.execute("delete from summaries where recording_id = ?", (recording_id,))
+        conn.execute("delete from emotion_analyses where recording_id = ?", (recording_id,))
+        conn.execute("delete from tasks where recording_id = ?", (recording_id,))
+        conn.execute("delete from recording_hotword_packages where recording_id = ?", (recording_id,))
+        conn.execute("delete from recordings where id = ?", (recording_id,))
+        audit(conn, user, "recording", f"删除录音：{rec['title']}。")
+    # 磁盘清理放在 DB 事务提交之后；任何失败都不应让请求 500，录音记录删除才是主目标。
+    if file_path:
+        try:
+            Path(file_path).unlink(missing_ok=True)
+        except OSError:
+            # 磁盘文件删除失败不影响主结果（DB 记录已删除）。
+            pass
+    return {"ok": True, "deleted_id": recording_id}
+
+
 @app.get("/api/recordings/{recording_id}/audio")
 def recording_audio(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> FileResponse:
     with db() as conn:
@@ -3345,25 +3517,6 @@ def emotion_api(
 def export_emotion(recording_id: str, user: dict[str, Any] = Depends(current_user)) -> FileResponse:
     path = write_export(recording_id, "emotion", user)
     return FileResponse(path, media_type="text/markdown; charset=utf-8", filename=path.name)
-
-
-@app.get("/api/tasks")
-def tasks(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
-    where, args = recording_where(user, "team" if user["role"] == "manager" else "mine")
-    if user["role"] == "admin":
-        with db() as conn:
-            return [task_payload(dict(row)) for row in conn.execute("select * from tasks order by updated_at desc limit 100").fetchall()]
-    with db() as conn:
-        rows = conn.execute(
-            f"""
-            select tasks.* from tasks
-            join recordings on recordings.id = tasks.recording_id
-            where {where}
-            order by tasks.updated_at desc limit 100
-            """,
-            args,
-        ).fetchall()
-        return [task_payload(dict(row)) for row in rows]
 
 
 def normalize_hotword(row: dict[str, Any]) -> dict[str, Any]:
@@ -3472,6 +3625,23 @@ def hotwords(
         return [normalize_hotword(dict(row)) for row in rows]
 
 
+@app.get("/api/hotwords/words")
+def hotword_words(_: dict[str, Any] = Depends(current_user)) -> list[str]:
+    """Personal-mode rich-text box source of truth.
+
+    Returns every word in the exact range that `PUT /api/hotwords` replaces
+    (source = 'manual'), with no pagination cap, sorted by word. Keeping this
+    read range identical to the PUT delete range guarantees the rich-text box
+    round-trips losslessly: load -> edit -> save can never silently drop words
+    that live beyond the paginated GET /api/hotwords 1000-row limit.
+    """
+    with db() as conn:
+        rows = conn.execute(
+            "select word from hotwords where source = 'manual' order by word"
+        ).fetchall()
+        return [row[0] for row in rows]
+
+
 @app.get("/api/hotwords/status")
 def hotword_status(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     with db() as conn:
@@ -3546,6 +3716,80 @@ def create_hotword(payload: dict[str, Any], user: dict[str, Any] = Depends(curre
         return normalize_hotword(row)
 
 
+HOTWORD_WORD_PATTERN = re.compile(r"^[一-鿿A-Za-z0-9]+$")
+
+
+@app.put("/api/hotwords")
+def save_all_hotwords(payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """Personal-mode bulk replace: overwrite the current user's manual hotwords.
+
+    The personal UI is a single rich-text box where every hotword is separated by
+    the Chinese enumeration comma 「、」. The frontend splits/trims that string and
+    sends the resulting array here. This endpoint fully replaces the user's manual
+    hotwords in one transaction; it never touches team-synced hotwords (other
+    `source` values) and leaves the heavy team-mode hotword logic untouched.
+    """
+    raw_words = payload.get("words")
+    if not isinstance(raw_words, list):
+        raise HTTPException(status_code=400, detail="words 必须是字符串数组")
+
+    # Validate + dedupe (case-insensitive: English lowercased, Chinese kept as-is).
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_words:
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="words 中每一项都必须是字符串")
+        word = raw.strip()
+        if not word:
+            raise HTTPException(status_code=400, detail="热词不能为空")
+        if not HOTWORD_WORD_PATTERN.match(word):
+            raise HTTPException(
+                status_code=400,
+                detail=f"热词「{word}」含有不允许的符号，只能是中文/字母/数字",
+            )
+        key = word.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(word)
+
+    # Stable fallback ordering; final pinyin ordering is done by the frontend.
+    words = sorted(cleaned)
+
+    ts = now()
+    with db() as conn:
+        # Single-user desktop build: replace ALL manual hotwords regardless of
+        # owner_id. Older POST-created manual rows may have an empty owner_id; this
+        # broader delete keeps the rich-text box a clean round-trip. Team-synced
+        # hotwords (other `source` values) are untouched.
+        conn.execute("delete from hotwords where source = 'manual'")
+        for word in words:
+            hid = str(uuid.uuid4())
+            row = {
+                "score": 0,
+                "weight": 8,
+                "kind": "术语",
+                "source": "manual",
+                "protected": 1,
+                "frequency": 1,
+                "last_seen_at": ts,
+            }
+            score = hotword_row_score(row)
+            conn.execute(
+                """
+                insert into hotwords(
+                    id,word,kind,aliases,source,scope,weight,active,state,protected,
+                    frequency,confidence,score,owner_id,first_seen_at,last_seen_at,updated_at
+                )
+                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (hid, word, "术语", "", "manual", "personal", 8, 1, "active", 1,
+                 1, 0.95, score, user["id"], ts, ts, ts),
+            )
+        audit(conn, user, "hotword.save_all", f"{user['name']} 全量保存个人热词：共 {len(words)} 条。")
+    return {"ok": True, "count": len(words), "words": words}
+
+
 @app.post("/api/hotwords/import")
 async def import_hotwords(
     file: UploadFile = File(...),
@@ -3612,7 +3856,7 @@ async def import_hotwords(
                     "score": 0,
                     "weight": cand["weight"],
                     "kind": cand["kind"],
-                    "source": "txt-import",
+                    "source": "manual",
                     "protected": 0,
                     "frequency": 1,
                     "last_seen_at": ts,
@@ -3626,7 +3870,7 @@ async def import_hotwords(
                 )
                 values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
-                (str(uuid.uuid4()), cand["word"], cand["kind"], cand["aliases"], "txt-import", "global",
+                (str(uuid.uuid4()), cand["word"], cand["kind"], cand["aliases"], "manual", "personal",
                  cand["weight"], 1, "active", 0, 1, 0.95, score, ts, ts, ts),
             )
             existing.add(cand["word"].lower())
@@ -3671,7 +3915,7 @@ def voiceprints(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, 
             normalize_profile(row)
             for row in rowsdict(
                 conn.execute(
-                    f"select id,name,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where {where} order by created_at desc",
+                    f"select id,name,note,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where {where} order by created_at desc",
                     args,
                 ).fetchall()
             )
@@ -3847,7 +4091,7 @@ def create_voiceprint(
         )
         conn.execute("update speaker_profiles set scope = ? where id = ?", (requested_scope, profile_id))
         audit(conn, user, "voiceprint.create", f"{user['name']} 登记{requested_scope}声纹样本：{name.strip()}。")
-        row = rowdict(conn.execute("select id,name,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where id = ?", (profile_id,)).fetchone())
+        row = rowdict(conn.execute("select id,name,note,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where id = ?", (profile_id,)).fetchone())
     return normalize_profile(row)
 
 
@@ -3870,6 +4114,8 @@ def create_voiceprint_from_recording(payload: dict[str, Any], user: dict[str, An
     profile_id = str(payload.get("profile_id") or "").strip()
     update_current = bool(payload.get("update_current_recording", True))
     threshold = clamp_voiceprint_threshold(payload.get("threshold"))
+    note = payload.get("note")
+    note = str(note).strip() if note is not None else None
 
     with db() as conn:
         rec = can_access_recording(conn, recording_id, user)
@@ -3885,33 +4131,61 @@ def create_voiceprint_from_recording(payload: dict[str, Any], user: dict[str, An
             requested_scope = existing_profile["scope"]
             profile_team_id = existing_profile.get("team_id")
             threshold = clamp_voiceprint_threshold(existing_profile.get("threshold") or threshold)
+            if note is None:
+                note = existing_profile.get("note")
         else:
             name = str(payload.get("name") or "").strip()
             if not name:
                 raise HTTPException(status_code=400, detail="name is required")
             requested_scope, profile_team_id = resolve_voiceprint_scope(user, str(payload.get("scope") or ""), str(payload.get("team_id") or ""))
+        all_rows = rowsdict(
+            conn.execute(
+                "select * from transcript_segments where recording_id = ? and speaker = ? order by start_sec",
+                (recording_id, speaker),
+            ).fetchall()
+        )
+        if not all_rows:
+            raise HTTPException(status_code=404, detail="speaker segments not found")
+        # Downgrade decision is based on the speaker's *total* speaking time in this
+        # recording, not just the picked sample rows.
+        speaker_total_duration = sum(max(0.0, float(row["end_sec"]) - float(row["start_sec"])) for row in all_rows)
         if segment_ids:
-            placeholders = ",".join("?" for _ in segment_ids)
-            rows = rowsdict(
-                conn.execute(
-                    f"""
-                    select * from transcript_segments
-                    where recording_id = ? and speaker = ? and id in ({placeholders})
-                    order by start_sec
-                    """,
-                    [recording_id, speaker, *segment_ids],
-                ).fetchall()
-            )
+            selected = {sid: True for sid in segment_ids}
+            rows = [row for row in all_rows if row["id"] in selected]
         else:
-            all_rows = rowsdict(
-                conn.execute(
-                    "select * from transcript_segments where recording_id = ? and speaker = ? order by start_sec",
-                    (recording_id, speaker),
-                ).fetchall()
-            )
             rows = candidate_sample_rows(all_rows, limit=8)
         if not rows:
             raise HTTPException(status_code=404, detail="speaker segments not found")
+
+        # <5s total speaking time: downgrade to name-only. Backfill speaker_name on
+        # this recording (and the picked note), but do NOT build a voiceprint.
+        if speaker_total_duration < 5:
+            updated_segments = 0
+            if update_current:
+                cursor = conn.execute(
+                    """
+                    update transcript_segments
+                    set speaker_name = ?, speaker_confidence = null
+                    where recording_id = ? and speaker = ?
+                    """,
+                    (name, recording_id, speaker),
+                )
+                updated_segments = cursor.rowcount
+                conn.execute("update recordings set updated_at = ? where id = ?", (now(), recording_id))
+            audit(
+                conn,
+                user,
+                "voiceprint.assign",
+                f"{user['name']} 将录音《{rec['title']}》的 Speaker {speaker} 标记为{name}（发言不足 5 秒，未建声纹）。",
+            )
+            return {
+                "profile": None,
+                "downgraded": True,
+                "sample_count": 0,
+                "sample_duration": speaker_total_duration,
+                "sample_duration_label": seconds_label(speaker_total_duration),
+                "updated_segments": updated_segments,
+            }
 
     total_duration = sum(max(0.0, float(row["end_sec"]) - float(row["start_sec"])) for row in rows)
     if total_duration < 5:
@@ -3938,16 +4212,16 @@ def create_voiceprint_from_recording(payload: dict[str, Any], user: dict[str, An
     with db() as conn:
         if existing_profile:
             conn.execute(
-                "update speaker_profiles set sample_path = ?, threshold = ? where id = ?",
-                (str(target), threshold, final_profile_id),
+                "update speaker_profiles set sample_path = ?, threshold = ?, note = ? where id = ?",
+                (str(target), threshold, note, final_profile_id),
             )
         else:
             conn.execute(
                 """
-                insert into speaker_profiles(id,name,owner_id,team_id,scope,sample_path,threshold,active,created_at)
-                values(?,?,?,?,?,?,?,1,?)
+                insert into speaker_profiles(id,name,note,owner_id,team_id,scope,sample_path,threshold,active,created_at)
+                values(?,?,?,?,?,?,?,?,1,?)
                 """,
-                (final_profile_id, name, user["id"], profile_team_id, requested_scope, str(target), threshold, now()),
+                (final_profile_id, name, note, user["id"], profile_team_id, requested_scope, str(target), threshold, now()),
             )
         conn.executemany(
             """
@@ -3990,12 +4264,13 @@ def create_voiceprint_from_recording(payload: dict[str, Any], user: dict[str, An
         )
         profile = rowdict(
             conn.execute(
-                "select id,name,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where id = ?",
+                "select id,name,note,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where id = ?",
                 (final_profile_id,),
             ).fetchone()
         )
     return {
         "profile": normalize_profile(profile),
+        "downgraded": False,
         "sample_count": len(rows),
         "sample_duration": total_duration,
         "sample_duration_label": seconds_label(total_duration),
@@ -4083,6 +4358,9 @@ def patch_voiceprint(profile_id: str, payload: dict[str, Any], user: dict[str, A
         updates: dict[str, Any] = {}
         if "name" in payload:
             updates["name"] = str(payload["name"]).strip()
+        if "note" in payload:
+            note = payload["note"]
+            updates["note"] = str(note).strip() if note is not None else None
         if "threshold" in payload:
             updates["threshold"] = clamp_voiceprint_threshold(payload["threshold"])
         if "active" in payload:
@@ -4092,8 +4370,36 @@ def patch_voiceprint(profile_id: str, payload: dict[str, Any], user: dict[str, A
         assignments = ", ".join(f"{key} = ?" for key in updates)
         conn.execute(f"update speaker_profiles set {assignments} where id = ?", (*updates.values(), profile_id))
         audit(conn, user, "voiceprint.update", f"{user['name']} 修改声纹样本：{profile['name']}。")
-        changed = rowdict(conn.execute("select id,name,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where id = ?", (profile_id,)).fetchone())
+        changed = rowdict(conn.execute("select id,name,note,owner_id,team_id,scope,threshold,active,created_at from speaker_profiles where id = ?", (profile_id,)).fetchone())
     return normalize_profile(changed)
+
+
+@app.delete("/api/voiceprints/{profile_id}")
+def delete_voiceprint(profile_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """Hard delete a voiceprint: remove the profile row, cascade its sample rows,
+    delete the sample audio file, and NULL out referencing transcript_segments'
+    voiceprint_id (keeping the speaker_name text so transcripts stay labeled)."""
+    with db() as conn:
+        profile = rowdict(conn.execute("select * from speaker_profiles where id = ?", (profile_id,)).fetchone())
+        if not profile:
+            raise HTTPException(status_code=404, detail="voiceprint not found")
+        profile = normalize_profile(profile)
+        if not can_manage_voiceprint(profile, user):
+            raise HTTPException(status_code=403, detail="voiceprint is outside current permission scope")
+        sample_path = str(profile.get("sample_path") or "").strip()
+        conn.execute(
+            "update transcript_segments set voiceprint_id = null where voiceprint_id = ?",
+            (profile_id,),
+        )
+        conn.execute("delete from speaker_samples where profile_id = ?", (profile_id,))
+        conn.execute("delete from speaker_profiles where id = ?", (profile_id,))
+        audit(conn, user, "voiceprint.delete", f"{user['name']} 删除声纹样本：{profile['name']}。")
+    if sample_path:
+        try:
+            Path(sample_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"ok": True, "id": profile_id}
 
 
 @app.get("/api/system/status")
@@ -4107,8 +4413,12 @@ def system_status(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any
         "punc": PUNC.exists(),
         "voiceprint": CAMPLUS.exists(),
         "ffmpeg": FFMPEG.exists(),
-        "deepseek_configured": bool(get_deepseek_config()[0]),
-        "deepseek_model": get_deepseek_config()[2],
+        "llm_configured": bool(get_llm_config()[0]),
+        "llm_model": get_llm_config()[2],
+        "llm_provider": get_llm_provider(),
+        # Legacy aliases.
+        "deepseek_configured": bool(get_llm_config()[0]),
+        "deepseek_model": get_llm_config()[2],
         "segmentation": "fsmn-vad dynamic segmentation",
         "diarization": "cam++ speaker diarization",
     }

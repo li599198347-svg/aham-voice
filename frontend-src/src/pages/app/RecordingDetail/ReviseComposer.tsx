@@ -12,10 +12,10 @@ interface Props {
   disabledReason?: string;
 }
 
-// The always-visible "改一下" composer at the bottom of the rail. Mirrors the
-// design system's .composer shape: textarea + tools row + send button.
-// Enter sends (Shift+Enter for newline) — Aham's "Enter is platform
-// convention" rule means we don't surface the hint as chrome.
+// The always-visible revise composer at the bottom of the rail. Built from the
+// official .composer (bordered white container: textarea + bottom send bar) with
+// the official .textarea control. Enter sends (Shift+Enter for newline), guarded
+// against IME composition.
 export function ReviseComposer({ recordingId, disabled, disabledReason }: Props) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
@@ -26,7 +26,6 @@ export function ReviseComposer({ recordingId, disabled, disabledReason }: Props)
     onSuccess: () => {
       setText("");
       qc.invalidateQueries({ queryKey: ["recording", recordingId] });
-      qc.invalidateQueries({ queryKey: ["tasks"] });
     },
     onError: (err) => setError(readApiError(err)),
   });
@@ -45,37 +44,37 @@ export function ReviseComposer({ recordingId, disabled, disabledReason }: Props)
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="composer"
-      style={{ borderRadius: 0, border: 0, borderTop: "1px solid var(--border-default)", padding: "var(--space-3) var(--space-4)" }}
-    >
-      {error && <Diag code="SUM_E_REVISE">{error}</Diag>}
-      <Textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={
-          disabled
-            ? disabledReason ?? "等纪要生成完后可以在这里告诉 AI 怎么改"
-            : "改一下：补一段商机分析、按客户重写第二节、删掉所有时间戳……"
-        }
-        rows={3}
-        disabled={disabled || revise.isPending}
-      />
-      <div className="composer-row">
-        <span className="meta" style={{ fontSize: "var(--text-2xs)", color: "var(--fg-subtle)" }}>
-          每次修改会创建新版本，原版仍可翻到
-        </span>
-        <Button
-          type="submit"
-          variant="primary"
-          size="sm"
-          loading={revise.isPending}
-          disabled={disabled || !text.trim()}
-        >
-          按要求重写
-        </Button>
+    <form onSubmit={submit}>
+      <div className="field">
+        <span className="label">修改纪要</span>
+        {error && <Diag code="SUM_E_REVISE">{error}</Diag>}
+        <div className="composer">
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={
+              disabled
+                ? disabledReason ?? "等纪要生成完后可以在这里告诉 AI 怎么改"
+                : "补一段商机分析、按客户重写第二节、删掉所有时间戳……"
+            }
+            rows={3}
+            disabled={disabled || revise.isPending}
+          />
+          <div className="composer__bar">
+            <Button
+              type="submit"
+              className="composer__send"
+              variant="primary"
+              size="sm"
+              loading={revise.isPending}
+              disabled={disabled || !text.trim()}
+            >
+              提交修改
+            </Button>
+          </div>
+        </div>
+        <span className="hint">每次修改会创建新版本，原版仍可翻到（Enter 提交 · Shift+Enter 换行）</span>
       </div>
     </form>
   );

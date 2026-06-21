@@ -1,4 +1,6 @@
 import { recordingAudioUrl } from "@/api/endpoints";
+import { AudioPlayer } from "@/components/voice/AudioPlayer";
+import { Status } from "@/components/Status";
 import type { Recording, TranscriptSegment, HotwordPackage } from "@/api/types";
 
 interface Props {
@@ -32,53 +34,52 @@ export function RecordingCard({ recording, segments, hotwordPackage }: Props) {
   const hotwordsEnabled = !!hotwordPackage && hotwordPackage.asr_terms_count > 0;
 
   return (
-    <section className="card" style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <header style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", alignItems: "baseline" }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: "var(--tracking-caps)" }}>
-          录音
-        </span>
-        <span style={{ fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)" }}>{recording.filename}</span>
-        <span className="meta" style={{ fontSize: "var(--text-xs)", color: "var(--fg-subtle)" }}>
+    <section className="card stack-card">
+      <header className="row" style={{ flexWrap: "wrap", gap: "var(--s2)", alignItems: "baseline" }}>
+        <span className="ftype">录音</span>
+        <span style={{ fontSize: "var(--text-sm)", fontWeight: "var(--w-medium)" }}>{recording.filename}</span>
+        <span className="text-caption">
           {recording.meeting_type} · {recording.duration_label}
         </span>
       </header>
 
-      <audio
-        controls
-        preload="metadata"
+      <AudioPlayer
         src={recordingAudioUrl(recording.id)}
-        style={{ width: "100%" }}
+        seed={recording.id}
+        ariaLabel="录音"
       />
 
       <div
+        className="card-grid"
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "var(--space-3)",
-          marginTop: "var(--space-1)",
+          marginTop: "var(--s1)",
+          // Three compact tiles aligned to the start instead of stretching
+          // across a wide card (#50); a min tile width keeps them grouped.
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          maxWidth: "480px",
         }}
       >
-        <div className="stat-tile">
-          <span className="stat-tile__label">热词</span>
-          <span className={`stat-tile__value${hotwordsEnabled ? "" : " is-pending"}`}>
+        <div className="metric">
+          <span className="k">热词</span>
+          <Status tone={hotwordsEnabled ? "moss" : "muted"}>
             {hotwordsEnabled ? `已启用 · ${hotwordPackage!.asr_terms_count} 条` : "暂未启用"}
-          </span>
+          </Status>
         </div>
-        <div className="stat-tile">
-          <span className="stat-tile__label">声纹</span>
-          <span className={`stat-tile__value${voiceprintMatched > 0 ? "" : " is-pending"}`}>
+        <div className="metric">
+          <span className="k">声纹</span>
+          <Status tone={voiceprintMatched > 0 ? "moss" : "muted"}>
             {speakerTotal === 0
               ? "—"
               : voiceprintMatched > 0
                 ? `已匹配 ${voiceprintMatched}/${speakerTotal}`
                 : "待匹配"}
-          </span>
+          </Status>
         </div>
-        <div className="stat-tile">
-          <span className="stat-tile__label">说话人</span>
-          <span className={`stat-tile__value${speakerTotal > 0 ? "" : " is-pending"}`}>
+        <div className="metric">
+          <span className="k">说话人</span>
+          <Status tone={speakerTotal > 0 ? "moss" : "muted"}>
             {speakerTotal > 0 ? `${speakerTotal} 位` : "—"}
-          </span>
+          </Status>
         </div>
       </div>
     </section>

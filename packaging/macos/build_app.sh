@@ -18,7 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="${AHAMVOICE_BUILD_DIR:-$HOME/AhamVoice-build}"
-APP="$BUILD_DIR/AhamVoice.app"
+APP="$BUILD_DIR/Aham Voice.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RES="$CONTENTS/Resources"
@@ -143,11 +143,11 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>AhamVoice</string>
-  <key>CFBundleDisplayName</key><string>AhamVoice</string>
+  <key>CFBundleName</key><string>Aham Voice</string>
+  <key>CFBundleDisplayName</key><string>Aham Voice</string>
   <key>CFBundleIdentifier</key><string>com.ahamvoice.desktop</string>
-  <key>CFBundleVersion</key><string>1.0.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleVersion</key><string>2.0.0</string>
+  <key>CFBundleShortVersionString</key><string>2.0.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>AhamVoice</string>
   <key>CFBundleIconFile</key><string>AhamVoice</string>
@@ -171,6 +171,17 @@ exec "$RES/python/bin/python3" "$RES/app/app_launcher.py"
 LAUNCH
 chmod +x "$MACOS/AhamVoice"
 
+# ---- 6.5 thin universal2 -> arm64 -----------------------------------------
+# Python wheels often ship universal2 (.so/.dylib carrying an x86_64 slice).
+# Drop the x86_64 slice so the app is pure arm64 — no Rosetta prompt on Apple
+# Silicon, and a smaller bundle. arm64 slice is verified-loadable beforehand.
+echo "==> [6.5/8] thinning universal2 binaries to arm64-only"
+while IFS= read -r -d '' f; do
+  if lipo -archs "$f" 2>/dev/null | grep -qw x86_64; then
+    lipo "$f" -thin arm64 -output "$f.__a" 2>/dev/null && mv -f "$f.__a" "$f" || rm -f "$f.__a"
+  fi
+done < <(find "$RES" -type f \( -name "*.so" -o -name "*.dylib" \) -print0)
+
 # ---- 7. ad-hoc codesign ----------------------------------------------------
 echo "==> [7/8] ad-hoc codesigning (arm64 requires a signature to run)"
 codesign --force --deep --sign - "$APP" 2>/dev/null || \
@@ -184,10 +195,10 @@ echo "    app size: $APP_SIZE"
 # Build directly from the .app (no staging copy) to keep peak disk usage low.
 # The install README ships alongside the DMG and is referenced there.
 echo "==> [8/8] building DMG"
-DMG="$BUILD_DIR/AhamVoice.dmg"
-cp "$SCRIPT_DIR/README-install.txt" "$BUILD_DIR/AhamVoice-安装说明.txt" 2>/dev/null || true
+DMG="$BUILD_DIR/Aham Voice.dmg"
+cp "$SCRIPT_DIR/README-install.txt" "$BUILD_DIR/Aham Voice-安装说明.txt" 2>/dev/null || true
 rm -f "$DMG"
-hdiutil create -volname "AhamVoice" -srcfolder "$APP" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "Aham Voice" -srcfolder "$APP" -ov -format UDZO "$DMG" >/dev/null
 DMG_SIZE=$(du -sh "$DMG" | awk '{print $1}')
 
 echo ""

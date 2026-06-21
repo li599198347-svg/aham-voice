@@ -13,9 +13,6 @@ export interface User {
   email: string;
   mobile: string;
   dept: string;
-  role: Role;
-  team_id: string | null;
-  managed_team_ids: string[];
   status: UserStatus;
   source: UserSource;
   wecom_userid: string | null;
@@ -56,9 +53,6 @@ export interface Recording {
   file_path: string;
   meeting_type: string;
   tag: string | null;
-  owner_id: string;
-  owner_name: string;
-  team_id: string | null;
   duration: number;
   duration_label: string;
   asr_status: RecordingProcessingStatus;
@@ -131,14 +125,20 @@ export interface Hotword {
   frequency: number;
   confidence: number;
   score: number;
-  team_id: string | null;
-  owner_id: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
   last_used_at: string | null;
   expires_at: string | null;
   hit_count: number;
   updated_at: string | null;
+}
+
+// Response of `PUT /api/hotwords` (personal-mode bulk replace). `words` is the
+// deduped, sorted list the backend actually persisted.
+export interface SaveAllHotwordsResponse {
+  ok: boolean;
+  count: number;
+  words: string[];
 }
 
 export interface HotwordSource {
@@ -176,9 +176,7 @@ export interface HotwordStatus {
 export interface Voiceprint {
   id: string;
   name: string;
-  owner_id: string | null;
-  team_id: string | null;
-  scope: "personal" | "team" | "global";
+  note: string | null;
   threshold: number;
   active: number;
   created_at: string;
@@ -256,6 +254,10 @@ export interface SystemStatus {
   punc: boolean;
   voiceprint: boolean;
   ffmpeg: boolean;
+  llm_configured: boolean;
+  llm_model: string;
+  llm_provider: string;
+  // Legacy DeepSeek aliases, kept for backward compatibility.
   deepseek_configured: boolean;
   deepseek_model: string;
   segmentation: string;
@@ -310,8 +312,28 @@ export interface RecordingDetail {
   hotword_package: HotwordPackage | null;
 }
 
+export interface DeleteRecordingResponse {
+  ok: boolean;
+  deleted_id: string;
+}
+
 export interface Settings {
+  // Generic LLM fields (any OpenAI-compatible endpoint).
+  llm_configured: boolean;
+  llm_api_base: string;
+  llm_model: string;
+  llm_provider: string;
+  // Legacy DeepSeek aliases, kept for backward compatibility.
   deepseek_configured: boolean;
   deepseek_api_base: string;
   deepseek_model: string;
+}
+
+// Result of POST /api/settings/test — a live probe of the LLM endpoint.
+// `error` (friendly Chinese) is present only when `ok` is false.
+export interface LlmTestResult {
+  ok: boolean;
+  model: string;
+  latency_ms: number;
+  error?: string;
 }

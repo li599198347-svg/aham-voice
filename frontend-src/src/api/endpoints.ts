@@ -1,11 +1,13 @@
 import { api, getStoredToken } from "./client";
 import type {
+  DeleteRecordingResponse,
   Hotword,
   HotwordStatus,
+  LlmTestResult,
   LoginResponse,
   Recording,
   RecordingDetail,
-  RecordingTask,
+  SaveAllHotwordsResponse,
   SpeakerCandidate,
   Settings,
   SystemStatus,
@@ -41,7 +43,7 @@ export async function fetchMe(): Promise<User> {
   return data;
 }
 
-// -------- settings (DeepSeek API key) --------
+// -------- settings (LLM / OpenAI-compatible API config) --------
 
 export async function fetchSettings(): Promise<Settings> {
   const { data } = await api.get<Settings>("/settings");
@@ -49,6 +51,12 @@ export async function fetchSettings(): Promise<Settings> {
 }
 
 export async function patchSettings(payload: Partial<{
+  // Generic LLM fields (preferred).
+  llm_api_key: string;
+  llm_api_base: string;
+  llm_model: string;
+  llm_provider: string;
+  // Legacy DeepSeek fields, still accepted by the backend for compatibility.
   deepseek_api_key: string;
   deepseek_api_base: string;
   deepseek_model: string;
@@ -57,10 +65,20 @@ export async function patchSettings(payload: Partial<{
   return data;
 }
 
+// Live-probe the LLM endpoint. With no payload the backend uses the stored
+// config; pass overrides to test values the user has typed but not yet saved.
+export async function testLlmConnection(payload?: {
+  api_key?: string;
+  api_base?: string;
+  model?: string;
+}): Promise<LlmTestResult> {
+  const { data } = await api.post<LlmTestResult>("/settings/test", payload ?? {});
+  return data;
+}
+
 // -------- recordings --------
 
 export async function fetchRecordings(params: {
-  scope?: "mine" | "team";
   q?: string;
   meeting_type?: string;
 }): Promise<Recording[]> {
@@ -70,6 +88,11 @@ export async function fetchRecordings(params: {
 
 export async function fetchRecording(id: string): Promise<RecordingDetail> {
   const { data } = await api.get<RecordingDetail>(`/recordings/${id}`);
+  return data;
+}
+
+export async function deleteRecording(id: string): Promise<DeleteRecordingResponse> {
+  const { data } = await api.delete<DeleteRecordingResponse>(`/recordings/${id}`);
   return data;
 }
 
@@ -144,13 +167,6 @@ export async function renameSpeaker(recordingId: string, speaker: string, payloa
   return data;
 }
 
-// -------- tasks --------
-
-export async function fetchTasks(): Promise<RecordingTask[]> {
-  const { data } = await api.get<RecordingTask[]>("/tasks");
-  return data;
-}
-
 // -------- hotwords (manual maintenance) --------
 
 export async function fetchHotwords(params: {
@@ -167,11 +183,27 @@ export async function fetchHotwordStatus(): Promise<HotwordStatus> {
   return data;
 }
 
+// Personal-mode: load every hotword's `word` to populate the rich-text box.
+// Uses the dedicated, un-paginated /hotwords/words endpoint whose read range
+// (source='manual') matches exactly what `PUT /hotwords` replaces — so the box
+// round-trips losslessly and never drops words beyond the paginated 1000 cap.
+export async function fetchAllHotwordWords(): Promise<string[]> {
+  const { data } = await api.get<string[]>("/hotwords/words");
+  return data;
+}
+
+// Personal-mode: full overwrite of the current user's manual hotwords. The
+// caller splits the 「、」-separated box into a trimmed array; the backend
+// validates, dedupes (case-insensitive), and returns the sorted persisted list.
+export async function saveAllHotwords(words: string[]): Promise<SaveAllHotwordsResponse> {
+  const { data } = await api.put<SaveAllHotwordsResponse>("/hotwords", { words });
+  return data;
+}
+
 export async function createHotword(payload: {
   word: string;
   kind?: string;
   aliases?: string;
-  scope?: string;
   weight?: number;
   protected?: boolean;
 }): Promise<Hotword> {
@@ -211,43 +243,63 @@ export async function fetchVoiceprints(): Promise<Voiceprint[]> {
 export async function createVoiceprint(input: {
   name: string;
   threshold?: number;
-  scope?: "personal" | "team" | "global";
-  team_id?: string;
   file: File;
 }): Promise<Voiceprint> {
   const form = new FormData();
   form.append("name", input.name);
   if (input.threshold != null) form.append("threshold", String(input.threshold));
-  if (input.scope) form.append("scope", input.scope);
-  if (input.team_id) form.append("team_id", input.team_id);
   form.append("file", input.file);
   const { data } = await api.post<Voiceprint>("/voiceprints", form);
   return data;
+}
+
+export interface NameSpeakerResult {
+  // null when downgraded (< 5s total speech: named only, no voiceprint built).
+  profile: Voiceprint | null;
+  downgraded: boolean;
+  sample_count: number;
+  sample_duration: number;
+  sample_duration_label: string;
+  updated_segments: number;
 }
 
 export async function createVoiceprintFromRecording(payload: {
   recording_id: string;
   speaker: string;
   name?: string;
+  note?: string;
   segment_ids?: string[];
   profile_id?: string;
   update_current_recording?: boolean;
   threshold?: number;
-  scope?: "personal" | "team" | "global";
-  team_id?: string;
-}): Promise<{
-  profile: Voiceprint;
-  sample_count: number;
-  sample_duration: number;
-  sample_duration_label: string;
-  updated_segments: number;
-}> {
-  const { data } = await api.post("/voiceprints/from-recording", payload);
+}): Promise<NameSpeakerResult> {
+  const { data } = await api.post<NameSpeakerResult>("/voiceprints/from-recording", payload);
   return data;
 }
 
-export async function patchVoiceprint(id: string, payload: Partial<Pick<Voiceprint, "name" | "threshold" | "active">>): Promise<Voiceprint> {
+// Name a speaker from a recording and build a voiceprint (with note). If the
+// speaker's total speaking time is < 5s the backend downgrades to name-only and
+// returns { downgraded: true, profile: null }.
+export async function nameSpeakerFromRecording(payload: {
+  recording_id: string;
+  speaker: string;
+  name: string;
+  note?: string;
+  segment_ids?: string[];
+  profile_id?: string;
+  update_current_recording?: boolean;
+  threshold?: number;
+}): Promise<NameSpeakerResult> {
+  return createVoiceprintFromRecording(payload);
+}
+
+export async function patchVoiceprint(id: string, payload: Partial<Pick<Voiceprint, "name" | "note" | "threshold" | "active">>): Promise<Voiceprint> {
   const { data } = await api.patch<Voiceprint>(`/voiceprints/${id}`, payload);
+  return data;
+}
+
+export async function deleteVoiceprint(id: string): Promise<{ ok: boolean; id: string }> {
+  const { data } = await api.delete<{ ok: boolean; id: string }>(`/voiceprints/${id}`);
   return data;
 }
 

@@ -1,167 +1,177 @@
-import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createVoiceprint, fetchVoiceprints, patchVoiceprint } from "@/api/endpoints";
+import { deleteVoiceprint, fetchVoiceprints, patchVoiceprint } from "@/api/endpoints";
 import { PageHead } from "@/components/PageHead";
 import { Button } from "@/components/Button";
-import { Status } from "@/components/Status";
 import { Icon } from "@/components/Icon";
-import { Field, FormRow } from "@/components/Field";
-import { EmptyState } from "@/components/EmptyState";
 import { Diag } from "@/components/Diag";
+import { PageLoading } from "@/components/PageLoading";
+import { SpeakerNameModal, type SpeakerNameValue } from "@/components/SpeakerNameModal";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { readApiError } from "@/api/client";
-import { useAuth } from "@/context/auth";
-import { formatBytes, formatRelative } from "@/utils/format";
+import { formatRelative } from "@/utils/format";
+import type { Voiceprint } from "@/api/types";
 
+// Single-user声纹库:列出已建立的声纹(由录音详情页的命名流程创建),支持
+// 改姓名+备注、真删。上传样本 / scope / 阈值等团队版能力已移除。
 export function Voiceprints() {
-  const { user } = useAuth();
   const qc = useQueryClient();
-
   const voiceprints = useQuery({ queryKey: ["voiceprints"], queryFn: fetchVoiceprints });
 
-  const [showUpload, setShowUpload] = useState(false);
-  const [name, setName] = useState("");
-  const [scope, setScope] = useState<"personal" | "team" | "global">(
-    user?.role === "admin" ? "global" : user?.role === "manager" ? "team" : "personal",
-  );
-  const [threshold, setThreshold] = useState(0.66);
-  const [file, setFile] = useState<File | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const create = useMutation({
-    mutationFn: createVoiceprint,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["voiceprints"] });
-      setShowUpload(false);
-      setName("");
-      setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    },
-    onError: (err) => setError(readApiError(err)),
-  });
+  const [editing, setEditing] = useState<Voiceprint | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Voiceprint | null>(null);
+  // Split error state so a failed edit (shown in the modal) and a failed delete
+  // (shown near the table) never overwrite each other.
+  const [editError, setEditError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const update = useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof patchVoiceprint>[1] }) =>
-      patchVoiceprint(id, payload),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["voiceprints"] }),
-    onError: (err) => setError(readApiError(err)),
+    mutationFn: ({ id, payload }: { id: string; payload: { name: string; note: string } }) =>
+      patchVoiceprint(id, { name: payload.name, note: payload.note }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["voiceprints"] });
+      setEditing(null);
+      setEditError(null);
+    },
+    onError: (err) => setEditError(readApiError(err)),
   });
 
-  function onFilePick(event: ChangeEvent<HTMLInputElement>) {
-    setFile(event.target.files?.[0] ?? null);
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteVoiceprint(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["voiceprints"] }),
+    onError: (err) => setDeleteError(readApiError(err)),
+  });
+
+  function handleSave(value: SpeakerNameValue) {
+    if (!editing) return;
+    setEditError(null);
+    update.mutate({ id: editing.id, payload: { name: value.name, note: value.note } });
   }
 
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    if (!file) {
-      setError("先选择一个声纹音频。");
-      return;
-    }
-    if (!name.trim()) {
-      setError("请填写说话人姓名。");
-      return;
-    }
-    create.mutate({ name: name.trim(), threshold, scope, file });
+  function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleteError(null);
+    remove.mutate(pendingDelete.id);
+    setPendingDelete(null);
   }
 
   const rows = voiceprints.data ?? [];
 
   return (
-    <div className="page-body page--object-index">
-      <PageHead
-        title="声纹"
-        subtitle={`共 ${rows.length} 个声纹样本。新录音会自动用这些样本标注说话人。`}
-        actions={
-          <Button variant="primary" size="sm" onClick={() => setShowUpload((v) => !v)}>
-            <Icon name="plus" size={14} /> {showUpload ? "收起" : "添加声纹"}
-          </Button>
-        }
-      />
+    <div className="container container--content">
+      <div className="page-shell">
+        <PageHead
+          title="声纹"
+          subtitle={`共 ${rows.length} 个声纹。新录音会自动用这些声纹标注说话人。`}
+        />
 
-      {error && <Diag code="VP_E_ACTION">{error}</Diag>}
-
-      {showUpload && (
-        <form
-          onSubmit={handleSubmit}
-          className="card"
-          style={{ padding: "var(--space-5)", marginBottom: "var(--space-5)", display: "flex", flexDirection: "column", gap: "var(--space-4)" }}
-        >
-          <FormRow label="姓名" required>
-            <Field value={name} onChange={(e) => setName(e.target.value)} placeholder="如：王晓东" />
-          </FormRow>
-          <FormRow label="可见范围">
-            <select className="field" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
-              {user?.role === "member" && <option value="personal">仅我</option>}
-              {(user?.role === "manager" || user?.role === "admin") && <option value="team">团队共享</option>}
-              {user?.role === "admin" && <option value="global">全公司</option>}
-            </select>
-          </FormRow>
-          <FormRow label="匹配阈值" hint="0.45–0.95。值越高越严，建议默认 0.66。">
-            <input
-              type="range"
-              min={0.45}
-              max={0.95}
-              step={0.01}
-              value={threshold}
-              onChange={(e) => setThreshold(Number(e.target.value))}
-            />
-            <span className="meta" style={{ marginLeft: "var(--space-3)", fontFamily: "var(--font-mono)" }}>
-              {threshold.toFixed(2)}
-            </span>
-          </FormRow>
-          <FormRow label="音频文件" required hint="时长不少于 5 秒。.m4a / .mp3 / .wav / .aac">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".m4a,.mp3,.wav,.aac,.flac"
-              onChange={onFilePick}
-              className="field"
-            />
-            {file && (
-              <span className="meta" style={{ marginLeft: "var(--space-3)" }}>
-                {file.name} · {formatBytes(file.size)}
-              </span>
-            )}
-          </FormRow>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)" }}>
-            <Button variant="ghost" type="button" onClick={() => setShowUpload(false)}>取消</Button>
-            <Button variant="primary" type="submit" loading={create.isPending} disabled={!name.trim() || !file}>
-              保存声纹
-            </Button>
-          </div>
-        </form>
-      )}
-
-      {voiceprints.isError && <Diag code="VP_E_LIST">{readApiError(voiceprints.error)}</Diag>}
-      {rows.length === 0 && !voiceprints.isLoading && !voiceprints.isError && (
-        <EmptyState description="还没有声纹。可以从录音详情页的「说话人」里保存一段发言为样本。" />
-      )}
-
-      {rows.length > 0 && (
-        <ul className="item-list">
-          {rows.map((vp) => (
-            <li key={vp.id} style={{ padding: "var(--space-4) 0", borderBottom: "1px solid var(--border-default)", display: "flex", gap: "var(--space-4)", alignItems: "center" }}>
-              <div style={{ flex: 1 }}>
-                <p style={{ fontWeight: 500 }}>{vp.name}</p>
-                <p className="meta" style={{ fontSize: "var(--text-xs)" }}>
-                  {vp.scope === "personal" ? "仅我" : vp.scope === "team" ? "团队共享" : "全公司"} · 阈值 {Number(vp.threshold).toFixed(2)} · 创建 {formatRelative(vp.created_at)}
-                </p>
-              </div>
-              <Status tone={vp.active ? "moss" : "muted"}>{vp.active ? "启用" : "停用"}</Status>
-              <div style={{ display: "flex", gap: "var(--space-2)" }}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => update.mutate({ id: vp.id, payload: { active: vp.active ? 0 : 1 } })}
-                >
-                  {vp.active ? "停用" : "启用"}
+        <div className="page-content">
+          {deleteError && <Diag code="VP_E_DELETE" detail={deleteError}>删除失败。请重试。</Diag>}
+          {voiceprints.isError && (
+            <Diag
+              code="VP_E_LIST"
+              detail={readApiError(voiceprints.error)}
+              actions={
+                <Button variant="secondary" size="sm" onClick={() => voiceprints.refetch()}>
+                  重试
                 </Button>
+              }
+            >
+              加载声纹失败。请检查网络后重试。
+            </Diag>
+          )}
+
+          {voiceprints.isLoading && <PageLoading />}
+
+          {rows.length === 0 && !voiceprints.isLoading && !voiceprints.isError && (
+            <div className="page-state">
+              <Icon name="fingerprint" size={48} className="page-state__icon" />
+              <div className="page-state__title">还没有声纹</div>
+              <p className="page-state__desc">
+                声纹用来在新录音里自动标注说话人。先去上传一段录音，在详情页点说话人、填写姓名即可建立。
+              </p>
+              <div className="page-state__actions">
+                <Link to="/app/recordings/new">
+                  <Button variant="primary">去上传录音</Button>
+                </Link>
               </div>
-            </li>
-          ))}
-        </ul>
-      )}
+            </div>
+          )}
+
+          {rows.length > 0 && (
+            <table className="doc-table">
+          <thead>
+            <tr>
+              <th>姓名</th>
+              <th>备注</th>
+              <th>创建时间</th>
+              <th aria-label="操作" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((vp) => (
+              <tr key={vp.id}>
+                <td>{vp.name}</td>
+                <td className="cat" style={{ color: vp.note ? "var(--ink-2)" : "var(--ink-3)" }}>
+                  {vp.note ? vp.note : "—"}
+                </td>
+                <td className="cat">{formatRelative(vp.created_at)}</td>
+                <td className="row-actions">
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => {
+                      setEditError(null);
+                      setEditing(vp);
+                    }}
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--danger btn--sm"
+                    disabled={remove.isPending}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setPendingDelete(vp);
+                    }}
+                  >
+                    删除
+                  </button>
+                </td>
+              </tr>
+            ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <SpeakerNameModal
+          open={!!editing}
+          title="编辑声纹"
+          initialName={editing?.name ?? ""}
+          initialNote={editing?.note ?? ""}
+          saving={update.isPending}
+          error={editError}
+          onClose={() => {
+            if (update.isPending) return;
+            setEditing(null);
+            setEditError(null);
+          }}
+          onSave={handleSave}
+        />
+
+        <ConfirmDialog
+          open={!!pendingDelete}
+          tone="danger"
+          title="删除声纹"
+          body={pendingDelete ? `删除「${pendingDelete.name}」？该操作不可撤销。` : ""}
+          confirmText="删除"
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={confirmDelete}
+        />
+      </div>
     </div>
   );
 }

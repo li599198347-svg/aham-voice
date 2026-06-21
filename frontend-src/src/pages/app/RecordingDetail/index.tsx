@@ -3,23 +3,19 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchRecording, processRecording, generateEmotion } from "@/api/endpoints";
 import { readApiError } from "@/api/client";
+import { PageHead } from "@/components/PageHead";
 import { Button } from "@/components/Button";
 import { Diag } from "@/components/Diag";
 import { Icon } from "@/components/Icon";
 import { PageLoading } from "@/components/PageLoading";
-import { EmptyState } from "@/components/EmptyState";
 import { Status } from "@/components/Status";
-import { cn } from "@/utils/cn";
 import { formatRelative } from "@/utils/format";
+import { overallLabel } from "@/utils/status";
 import { RecordingCard } from "./RecordingCard";
 import { SpeakersCard } from "./SpeakersCard";
 import { Timeline } from "./Timeline";
 import { Preview, TRANSCRIPT_KEY, EMOTION_KEY, summaryArtifactKey, type ArtifactKey } from "./Preview";
 import { ReviseComposer } from "./ReviseComposer";
-import { Drawer } from "./Drawer";
-import { SpeakersPanel } from "./SpeakersPanel";
-
-type DrawerKind = "speaker" | null;
 
 function overallTone(asr: string, summary: string): React.ComponentProps<typeof Status>["tone"] {
   if (asr === "failed" || summary === "failed") return "rust";
@@ -30,32 +26,11 @@ function overallTone(asr: string, summary: string): React.ComponentProps<typeof 
   return "muted";
 }
 
-function overallLabel(asr: string, summary: string): string {
-  if (asr === "failed" || summary === "failed") return "失败";
-  if (asr === "running" || summary === "running") return "处理中";
-  if (asr === "queued") return "排队中";
-  if (asr === "done" && summary === "done") return "已生成";
-  if (asr === "done") return "等待纪要";
-  return "未开始";
-}
-
 export function RecordingDetail() {
   const { id } = useParams<{ id: string }>();
   const recordingId = id ?? "";
   const navigate = useNavigate();
   const qc = useQueryClient();
-
-  // Apply the split-panel template to the body region for this route only.
-  // Default state: rail is .is-closed → grid collapses to 1fr · 0, left main
-  // fills viewport. When a doc card is clicked, rail opens to 50% width.
-  useEffect(() => {
-    const main = document.querySelector("main.app-shell__body");
-    if (!main) return;
-    main.classList.add("page--split-panel");
-    return () => {
-      main.classList.remove("page--split-panel");
-    };
-  }, []);
 
   const detail = useQuery({
     queryKey: ["recording", recordingId],
@@ -92,10 +67,8 @@ export function RecordingDetail() {
     },
   });
 
-  // Rail-preview selection. null = rail closed (default).
+  // Rail-preview selection. null = floating preview closed (default).
   const [previewKey, setPreviewKey] = useState<ArtifactKey | null>(null);
-  const [drawer, setDrawer] = useState<DrawerKind>(null);
-  const [drawerSpeaker, setDrawerSpeaker] = useState<string | undefined>(undefined);
 
   const summaries = detail.data?.summaries ?? [];
   const currentSummary = useMemo(
@@ -105,32 +78,59 @@ export function RecordingDetail() {
 
   // When the user revises and a new current summary appears, follow them to
   // the new version IF they're already previewing a summary. Never auto-open
-  // the rail.
+  // the preview.
   useEffect(() => {
     if (!currentSummary || !previewKey || !previewKey.startsWith("summary:")) return;
-    const id = previewKey.slice("summary:".length);
-    const old = summaries.find((s) => s.id === id);
-    if (old && !old.is_current && currentSummary.id !== id) {
+    const sid = previewKey.slice("summary:".length);
+    const old = summaries.find((s) => s.id === sid);
+    if (old && !old.is_current && currentSummary.id !== sid) {
       setPreviewKey(summaryArtifactKey(currentSummary));
     }
   }, [currentSummary, previewKey, summaries]);
 
   if (detail.isLoading) {
     return (
-      <div style={{ padding: "var(--space-8)" }}>
-        <PageLoading />
+      <div className="container container--content">
+        <div className="page-shell">
+          <div className="page-state">
+            <PageLoading />
+          </div>
+        </div>
       </div>
     );
   }
   if (detail.isError) {
     return (
-      <div style={{ padding: "var(--space-8)" }}>
-        <Diag code="REC_E_DETAIL">{readApiError(detail.error)}</Diag>
-        <Button variant="ghost" onClick={() => navigate("/app/recordings")}>返回列表</Button>
+      <div className="container container--content">
+        <div className="page-shell">
+          <div className="page-state">
+            <Icon name="alert-triangle" size={48} className="page-state__icon" />
+            <div className="page-state__title">打不开这条录音</div>
+            <Diag code="REC_E_DETAIL">{readApiError(detail.error)}</Diag>
+            <div className="page-state__actions">
+              <Button variant="ghost" onClick={() => navigate("/app/recordings")}>返回列表</Button>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
-  if (!detail.data) return <EmptyState description="没有这条录音。" />;
+  if (!detail.data) {
+    return (
+      <div className="container container--content">
+        <div className="page-shell">
+          <div className="page-state">
+            <Icon name="mic" size={48} className="page-state__icon" />
+            <div className="page-state__title">没有这条录音</div>
+            <p className="page-state__desc">这条录音可能已被删除。</p>
+            <div className="page-state__actions">
+              <Button variant="ghost" onClick={() => navigate("/app/recordings")}>返回列表</Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const { recording: rec, segments, tasks, hotword_package: pkg, emotion_analysis: emotionAnalysis } = detail.data;
   const emotionRunning = tasks.some(
@@ -155,38 +155,24 @@ export function RecordingDetail() {
           ? "先在右侧生成一版纪要再来修改"
           : undefined;
 
-  return (
+  const subtitle = (
     <>
-      {/* ───────────────── LEFT (main) ───────────────── */}
-      <div className="split-panel__main detail-main">
-        {/* Scrollable content region (grid row 1) */}
-        <div className="detail-main__scroll">
-          <div className="obj-head">
-            <div className="obj-head__main">
-              <h1 className="obj-head__title">{rec.title}</h1>
-              <div className="obj-head__meta">
-                <span>{rec.duration_label}</span>
-                <span>·</span>
-                <span>{segments.length} 段转写</span>
-                <span>·</span>
-                <span>{uniqueSpeakers} 位说话人</span>
-                {rec.tag && (
-                  <>
-                    <span>·</span>
-                    <span>{rec.tag}</span>
-                  </>
-                )}
-                <span>·</span>
-                <span>{formatRelative(rec.updated_at)}</span>
-              </div>
-            </div>
-            <div className="obj-head__status">
+      {rec.duration_label} · {segments.length} 段转写 · {uniqueSpeakers} 位说话人
+      {rec.tag ? ` · ${rec.tag}` : ""} · {formatRelative(rec.updated_at)}
+    </>
+  );
+
+  return (
+    <div className="container container--content">
+      <div className="page-shell">
+        <PageHead
+          title={rec.title}
+          subtitle={subtitle}
+          actions={
+            <div className="row" style={{ gap: "var(--s3)" }}>
               <Status tone={tone}>{label}</Status>
-            </div>
-            <div className="obj-head__actions">
               <Button
                 variant="primary"
-                size="sm"
                 loading={reprocess.isPending}
                 disabled={reprocessDisabled}
                 onClick={() => reprocess.mutate()}
@@ -194,75 +180,59 @@ export function RecordingDetail() {
                 <Icon name="refresh-cw" size={14} /> 重新处理
               </Button>
             </div>
+          }
+        />
+
+        <div className="page-content">
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s5)" }}>
+            <RecordingCard recording={rec} segments={segments} hotwordPackage={pkg} />
+
+            <SpeakersCard recordingId={recordingId} asrStatus={rec.asr_status} />
+
+            <Timeline
+              recording={rec}
+              tasks={tasks}
+              summaries={summaries}
+              segments={segments}
+              emotion={emotionAnalysis}
+              onPreviewSummary={(summaryId) => setPreviewKey(`summary:${summaryId}`)}
+              onPreviewTranscript={() => setPreviewKey(TRANSCRIPT_KEY)}
+              onPreviewEmotion={() => setPreviewKey(EMOTION_KEY)}
+              onGenerateEmotion={() => emotionMut.mutate()}
+              emotionPending={emotionMut.isPending || emotionRunning}
+              activePreviewKey={previewKey}
+            />
+
+            <ReviseComposer
+              recordingId={recordingId}
+              disabled={composerDisabled}
+              disabledReason={composerDisabledReason}
+            />
           </div>
-
-          <RecordingCard recording={rec} segments={segments} hotwordPackage={pkg} />
-
-          <SpeakersCard
-            recordingId={recordingId}
-            asrStatus={rec.asr_status}
-            onPickSpeaker={(speaker) => {
-              setDrawerSpeaker(speaker);
-              setDrawer("speaker");
-            }}
-          />
-
-          <Timeline
-            recording={rec}
-            tasks={tasks}
-            summaries={summaries}
-            segments={segments}
-            emotion={emotionAnalysis}
-            onPreviewSummary={(summaryId) => setPreviewKey(`summary:${summaryId}`)}
-            onPreviewTranscript={() => setPreviewKey(TRANSCRIPT_KEY)}
-            onPreviewEmotion={() => setPreviewKey(EMOTION_KEY)}
-            onGenerateEmotion={() => emotionMut.mutate()}
-            emotionPending={emotionMut.isPending || emotionRunning}
-            activePreviewKey={previewKey}
-          />
-        </div>
-
-        {/* Sticky-bottom composer dock */}
-        <div className="detail-composer-dock">
-          <ReviseComposer
-            recordingId={recordingId}
-            disabled={composerDisabled}
-            disabledReason={composerDisabledReason}
-          />
         </div>
       </div>
 
-      {/* ───────────────── RIGHT RAIL (slides in only when an artifact is selected) ───────────────── */}
-      <aside className={cn("split-panel__rail", previewKey === null && "is-closed")}>
-        {previewKey !== null && (
-          <Preview
-            recordingId={recordingId}
-            summaries={summaries}
-            segments={segments}
-            emotion={emotionAnalysis}
-            selected={previewKey}
-            onSelect={setPreviewKey}
-            onClose={() => setPreviewKey(null)}
-          />
-        )}
-      </aside>
-
-      {/* ───────────────── Drawers ───────────────── */}
-      <Drawer
-        open={drawer === "speaker"}
-        onClose={() => {
-          setDrawer(null);
-          setDrawerSpeaker(undefined);
-        }}
-        title="说话人管理"
-        subtitle={rec.title}
-      >
-        <SpeakersPanel
-          recordingId={recordingId}
-          asrStatus={rec.asr_status}
-          initialSpeaker={drawerSpeaker}
-        />
-      </Drawer>
-    </>
+      {/* AI rail — floating overlay; never squeezes the centered main content.
+          Slides in only when an artifact is selected from the Timeline. */}
+      {previewKey !== null && (
+        <>
+          <div className="scrim" onClick={() => setPreviewKey(null)} />
+          {/* Official .drawer; only the width differs from --rightbar-w, so it
+              is the single inline override. .detail-preview stretches the
+              window child to fill the rail height. */}
+          <aside className="drawer detail-preview" style={{ width: "min(560px, 92vw)" }}>
+            <Preview
+              recordingId={recordingId}
+              summaries={summaries}
+              segments={segments}
+              emotion={emotionAnalysis}
+              selected={previewKey}
+              onSelect={setPreviewKey}
+              onClose={() => setPreviewKey(null)}
+            />
+          </aside>
+        </>
+      )}
+    </div>
   );
 }

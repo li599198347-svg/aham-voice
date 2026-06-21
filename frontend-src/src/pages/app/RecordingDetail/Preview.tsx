@@ -1,8 +1,15 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { exportEmotionUrl, exportSummaryVersionUrl, exportTranscriptUrl } from "@/api/endpoints";
+import {
+  exportEmotionUrl,
+  exportSummaryVersionUrl,
+  exportTranscriptUrl,
+  recordingAudioUrl,
+} from "@/api/endpoints";
 import { Icon } from "@/components/Icon";
+import { AudioPlayer } from "@/components/voice/AudioPlayer";
+import { TranscriptView } from "@/components/voice/TranscriptView";
 import type { EmotionAnalysis, Summary, TranscriptSegment } from "@/api/types";
 
 export type ArtifactKey = string;
@@ -41,6 +48,10 @@ function transcriptMarkdown(segments: TranscriptSegment[]): string {
 }
 
 export function Preview({ recordingId, summaries, segments, emotion, selected, onSelect, onClose }: Props) {
+  // Playhead + seek coordination for the per-sentence transcript view.
+  const [currentSec, setCurrentSec] = useState(0);
+  const [seekReq, setSeekReq] = useState<{ sec: number; nonce: number } | null>(null);
+  const seekNonce = useRef(0);
   const currentSummary = useMemo(() => {
     if (!selected.startsWith("summary:")) return null;
     const id = selected.slice("summary:".length);
@@ -101,19 +112,15 @@ export function Preview({ recordingId, summaries, segments, emotion, selected, o
   }
 
   return (
-    <div
-      className="preview-window"
-      style={{ height: "100%", borderRadius: 0, border: 0, boxShadow: "none" }}
-    >
-      <header className="preview-header">
-        <span className="preview-type">MD</span>
-        <span className="preview-title">{displayName}</span>
-        <span className="preview-meta">{metaText}</span>
-        <div className="preview-actions">
+    <div className="window window--flush">
+      <header className="window__bar">
+        <span className="ftype">MD</span>
+        <span className="window__title">{displayName}</span>
+        <span className="text-caption">{metaText}</span>
+        <div className="window__actions">
           {summaries.length + (segments.length > 0 ? 1 : 0) + (emotion ? 1 : 0) > 1 && (
             <select
-              className="field"
-              style={{ width: 168, height: 28, fontSize: "var(--text-xs)" }}
+              className="select select--sm"
               value={selected}
               onChange={(e) => onSelect(e.target.value)}
               aria-label="切换产物"
@@ -141,11 +148,42 @@ export function Preview({ recordingId, summaries, segments, emotion, selected, o
         </div>
       </header>
 
-      <div className="preview-body">
-        <article className="preview-doc markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
-        </article>
-      </div>
+      {isTranscript ? (
+        <>
+          <div
+            style={{
+              padding: "var(--s3) var(--s4)",
+              borderBottom: "1px solid var(--line)",
+              flex: "none",
+            }}
+          >
+            <AudioPlayer
+              src={recordingAudioUrl(recordingId)}
+              seed={recordingId}
+              ariaLabel="录音"
+              onTime={setCurrentSec}
+              seekRequest={seekReq}
+            />
+          </div>
+          <div className="window__body fill" style={{ padding: "var(--s2) var(--s3)" }}>
+            <TranscriptView
+              segments={segments}
+              currentSec={currentSec}
+              followPlayback
+              onSeek={(sec) => {
+                seekNonce.current += 1;
+                setSeekReq({ sec, nonce: seekNonce.current });
+              }}
+            />
+          </div>
+        </>
+      ) : (
+        <div className="window__body fill">
+          <article className="prose">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+          </article>
+        </div>
+      )}
     </div>
   );
 }

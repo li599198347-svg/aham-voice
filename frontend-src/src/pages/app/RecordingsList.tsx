@@ -1,61 +1,129 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { fetchRecordings } from "@/api/endpoints";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { deleteRecording, fetchRecordings } from "@/api/endpoints";
 import { PageHead } from "@/components/PageHead";
 import { Button } from "@/components/Button";
 import { Status } from "@/components/Status";
 import { Icon } from "@/components/Icon";
-import { EmptyState } from "@/components/EmptyState";
 import { Diag } from "@/components/Diag";
-import { useAuth } from "@/context/auth";
+import { PageLoading } from "@/components/PageLoading";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { readApiError } from "@/api/client";
 import { formatRelative } from "@/utils/format";
-import type { Recording, RecordingProcessingStatus } from "@/api/types";
+import { statusLabel, overallLabel } from "@/utils/status";
+import type { Recording } from "@/api/types";
 
 const MEETING_TYPES = ["全部", "内部会议", "客户调研", "方案汇报", "销售电话"];
 
-function statusLabel(status: RecordingProcessingStatus): string {
-  switch (status) {
-    case "done":
-      return "已完成";
-    case "running":
-      return "进行中";
-    case "queued":
-      return "排队中";
-    case "failed":
-      return "失败";
-    case "pending":
+// Sortable columns. Each maps to a comparable scalar so the table can be
+// sorted with a single shared comparator (string locale-aware, number numeric).
+type SortKey = "title" | "meeting_type" | "duration" | "updated_at";
+type SortDir = "asc" | "desc";
+
+function sortValue(rec: Recording, key: SortKey): string | number {
+  switch (key) {
+    case "duration":
+      return rec.duration ?? 0;
+    case "updated_at":
+      return rec.updated_at ? Date.parse(rec.updated_at) : 0;
+    case "title":
+    case "meeting_type":
     default:
-      return "未开始";
+      return (rec[key] ?? "").toString().toLowerCase();
   }
 }
 
 function overallStatus(rec: Recording): { tone: React.ComponentProps<typeof Status>["tone"]; label: string } {
-  if (rec.asr_status === "failed" || rec.summary_status === "failed") return { tone: "rust", label: "失败" };
-  if (rec.asr_status === "running" || rec.summary_status === "running") return { tone: "accent", label: "进行中" };
-  if (rec.asr_status === "queued") return { tone: "slate", label: "排队中" };
-  if (rec.asr_status === "done" && rec.summary_status === "done") return { tone: "moss", label: "已完成" };
-  if (rec.asr_status === "done") return { tone: "accent", label: "等待纪要" };
-  return { tone: "muted", label: "未开始" };
+  const label = overallLabel(rec.asr_status, rec.summary_status);
+  if (rec.asr_status === "failed" || rec.summary_status === "failed") return { tone: "rust", label };
+  if (rec.asr_status === "running" || rec.summary_status === "running") return { tone: "accent", label };
+  if (rec.asr_status === "queued") return { tone: "slate", label };
+  if (rec.asr_status === "done" && rec.summary_status === "done") return { tone: "moss", label };
+  if (rec.asr_status === "done") return { tone: "accent", label };
+  return { tone: "muted", label };
+}
+
+function SortableTh({
+  label,
+  sortKey,
+  active,
+  dir,
+  onSort,
+  numeric,
+}: {
+  label: string;
+  sortKey: SortKey;
+  active: SortKey;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+  numeric?: boolean;
+}) {
+  const isActive = active === sortKey;
+  return (
+    <th
+      className={numeric ? "num sortable" : "sortable"}
+      aria-sort={isActive ? (dir === "asc" ? "ascending" : "descending") : "none"}
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      <span className="caret">{isActive ? (dir === "asc" ? "▲" : "▼") : ""}</span>
+    </th>
+  );
 }
 
 export function RecordingsList() {
-  const { user } = useAuth();
-  const isOrgWide = user?.role === "manager" && (user?.managed_team_ids ?? []).includes("*");
-  const [scope, setScope] = useState<"mine" | "team">(isOrgWide ? "team" : "mine");
   const [meetingType, setMeetingType] = useState<string>("全部");
   const [q, setQ] = useState("");
+  // Controlled table sort. Clicking a sortable header toggles asc/desc, or
+  // switches the active column. updated_at defaults to most-recent-first.
+  const [sortKey, setSortKey] = useState<SortKey>("updated_at");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // Recording pending deletion; drives the destructive ConfirmDialog.
+  const [pendingDelete, setPendingDelete] = useState<Recording | null>(null);
+  // Id of the row whose delete is in flight, so only that row's button disables.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const query = useQuery({
-    queryKey: ["recordings", scope, meetingType, q],
-    queryFn: () => fetchRecordings({ scope, meeting_type: meetingType, q }),
+    queryKey: ["recordings", meetingType, q],
+    queryFn: () => fetchRecordings({ meeting_type: meetingType, q }),
   });
 
-  const filtered = query.data ?? [];
-  const canSeeTeam = user?.role === "manager";
+  // Per-row delete. Confirms, calls the backend, then invalidates every
+  // recordings query (across all scope/filter combos) so the list refreshes.
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteRecording(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["recordings"] });
+    },
+    onSettled: () => setDeletingId(null),
+  });
+
+  const rows = query.data ?? [];
+  const filtered = useMemo(() => {
+    const sorted = [...rows].sort((a, b) => {
+      const va = sortValue(a, sortKey);
+      const vb = sortValue(b, sortKey);
+      let cmp: number;
+      if (typeof va === "number" && typeof vb === "number") cmp = va - vb;
+      else cmp = String(va).localeCompare(String(vb), "zh-Hans-CN");
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [rows, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      // Time/duration feel natural starting high→low; text starts a→z.
+      setSortDir(key === "updated_at" || key === "duration" ? "desc" : "asc");
+    }
+  }
 
   const totalLabel = useMemo(() => {
     if (query.isLoading) return "加载中";
@@ -64,132 +132,171 @@ export function RecordingsList() {
   }, [filtered.length, query.isLoading]);
 
   return (
-    <div className="page-body page--object-index">
-      <PageHead
-        title="录音库"
-        subtitle={`当前 ${totalLabel}。点开任一条进入逐字稿、纪要、说话人视图。`}
-        actions={
-          <Button variant="primary" onClick={() => navigate("/app/recordings/new")}>
-            <Icon name="upload" size={14} /> 上传录音
-          </Button>
-        }
-      />
-
-      <div className="filter-bar">
-        <div className="filter-bar__search">
-          <Icon name="search" size={14} className="filter-bar__search-icon" />
-          <input
-            type="search"
-            placeholder="搜索标题、客户、标签、负责人"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-        </div>
-        {canSeeTeam && (
-          <div className="filter-bar__segments" role="tablist" aria-label="可见范围">
-            <button role="tab" aria-selected={scope === "mine"} onClick={() => setScope("mine")}>
-              我的
-            </button>
-            <button role="tab" aria-selected={scope === "team"} onClick={() => setScope("team")}>
-              {isOrgWide ? "全部" : "团队"}
-            </button>
-          </div>
-        )}
-        <select
-          className="filter-bar__sort"
-          value={meetingType}
-          onChange={(e) => setMeetingType(e.target.value)}
-          aria-label="会议类型"
-        >
-          {MEETING_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {query.isError && (
-        <Diag code="REC_E_LIST">{readApiError(query.error)}</Diag>
-      )}
-
-      {!query.isError && filtered.length === 0 && !query.isLoading ? (
-        <EmptyState
-          description={
-            q || meetingType !== "全部"
-              ? "当前筛选下没有匹配的录音。试试清空筛选条件。"
-              : "还没有任何录音。从右上角上传一段开始。"
-          }
-          action={
-            !q && meetingType === "全部" ? (
-              <Link to="/app/recordings/new">
-                <Button variant="ghost">上传录音</Button>
-              </Link>
-            ) : undefined
+    <div className="container container--content">
+      <div className="page-shell">
+        <PageHead
+          title="录音库"
+          subtitle={query.isLoading ? "加载中…" : `共 ${filtered.length} 条录音。`}
+          actions={
+            <Button variant="primary" onClick={() => navigate("/app/recordings/new")}>
+              <Icon name="upload" size={14} /> 上传录音
+            </Button>
           }
         />
-      ) : (
-        <>
-          <table className="data-table">
+
+        <div className="page-toolbar">
+          <div className="page-toolbar__lead">
+            <span className="result-count">{totalLabel}</span>
+          </div>
+          <div className="page-toolbar__trail">
+            <input
+              className="input toolbar-search"
+              type="search"
+              aria-label="搜索录音"
+              placeholder="搜索录音…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            <select
+              className="select"
+              value={meetingType}
+              onChange={(e) => setMeetingType(e.target.value)}
+              aria-label="会议类型"
+            >
+              {MEETING_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="page-content page-content--stack">
+          {query.isError && (
+            <Diag
+              code="REC_E_LIST"
+              detail={readApiError(query.error)}
+              actions={
+                <Button variant="secondary" size="sm" onClick={() => query.refetch()}>
+                  重试
+                </Button>
+              }
+            >
+              加载录音失败。请检查网络后重试。
+            </Diag>
+          )}
+
+          {remove.isError && (
+            <div className="alert alert--risk" role="alert">
+              <span>删除失败：{readApiError(remove.error)}</span>
+            </div>
+          )}
+
+          {query.isLoading && <PageLoading />}
+
+          {!query.isError && !query.isLoading && (filtered.length === 0 ? (
+            <div className="page-state">
+              <Icon name="mic" size={48} className="page-state__icon" />
+              <div className="page-state__title">
+                {q || meetingType !== "全部" ? "没有匹配的录音" : "还没有任何录音"}
+              </div>
+              <p className="page-state__desc">
+                {q || meetingType !== "全部"
+                  ? "当前筛选下没有匹配的录音。试试清空筛选条件。"
+                  : "还没有任何录音。从右上角上传一段开始。"}
+              </p>
+              {!q && meetingType === "全部" && (
+                <div className="page-state__actions">
+                  <Link to="/app/recordings/new">
+                    <Button variant="primary">上传录音</Button>
+                  </Link>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="table-xscroll scroll-shadow">
+              <table className="doc-table" data-sortable>
             <thead>
               <tr>
-                <th className="col-grow">录音</th>
-                <th className="col-fit">会议类型</th>
-                <th className="col-fit">客户 / 项目</th>
-                <th className="col-fit">时长</th>
-                <th className="col-fit">负责人</th>
-                <th className="col-fit">状态</th>
-                <th className="col-fit">更新</th>
-                <th className="col-fit"></th>
+                <SortableTh label="录音" sortKey="title" active={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="会议类型" sortKey="meeting_type" active={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="时长" sortKey="duration" active={sortKey} dir={sortDir} onSort={toggleSort} numeric />
+                <th>状态</th>
+                <SortableTh label="更新" sortKey="updated_at" active={sortKey} dir={sortDir} onSort={toggleSort} />
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((rec) => {
                 const overall = overallStatus(rec);
                 return (
-                  <tr key={rec.id} onClick={() => navigate(`/app/recordings/${rec.id}`)} style={{ cursor: "pointer" }}>
+                  <tr key={rec.id}>
                     <td>
-                      <div className="cell-stack">
-                        <span className="primary">{rec.title}</span>
-                        <span className="secondary">{rec.filename}</span>
+                      <div className="lockup">
+                        <div className="lk-body">
+                          <Link to={`/app/recordings/${rec.id}`} className="lk-title">{rec.title}</Link>
+                          <span className="lk-sub t-2">{rec.filename}</span>
+                        </div>
                       </div>
                     </td>
                     <td className="cat">{rec.meeting_type}</td>
-                    <td className="meta">{rec.tag || "—"}</td>
-                    <td className="meta">{rec.duration_label}</td>
-                    <td className="meta">{rec.owner_name}</td>
+                    <td className="num">{rec.duration_label}</td>
                     <td>
                       <Status tone={overall.tone}>{overall.label}</Status>
                       {rec.asr_status === "done" && rec.summary_status === "running" && (
-                        <span className="meta" style={{ display: "block", fontSize: "var(--text-xs)" }}>
+                        <div className="text-caption t-2">
                           纪要 {statusLabel(rec.summary_status)}
-                        </span>
+                        </div>
                       )}
                     </td>
-                    <td className="meta">{formatRelative(rec.updated_at)}</td>
+                    <td className="cat">{formatRelative(rec.updated_at)}</td>
                     <td>
                       <button
+                        type="button"
                         className="icon-btn"
-                        aria-label="打开"
+                        aria-label="删除"
+                        title="删除"
+                        disabled={remove.isPending && deletingId === rec.id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/app/recordings/${rec.id}`);
+                          setPendingDelete(rec);
                         }}
                       >
-                        <Icon name="external-link" size={14} />
+                        <Icon name="trash-2" size={14} />
                       </button>
                     </td>
                   </tr>
                 );
               })}
-            </tbody>
-          </table>
+                </tbody>
+              </table>
+              </div>
 
-          <div className="list-footer">
-            <span className="count">共 {filtered.length} 条</span>
-          </div>
-        </>
-      )}
+              <div className="list-foot">
+                <span>共 {filtered.length} 条</span>
+              </div>
+            </>
+          ))}
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        tone="danger"
+        title="删除录音"
+        body={pendingDelete ? `删除「${pendingDelete.title}」？该操作不可撤销。` : ""}
+        confirmText="删除"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (pendingDelete) {
+            setDeletingId(pendingDelete.id);
+            remove.mutate(pendingDelete.id);
+          }
+          setPendingDelete(null);
+        }}
+      />
     </div>
   );
 }

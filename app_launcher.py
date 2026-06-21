@@ -125,7 +125,7 @@ def main() -> int:
     import webview
 
     webview.create_window(
-        "AhamVoice",
+        "Aham Voice",
         f"http://127.0.0.1:{port}",
         js_api=_DesktopApi(port),
         width=1320,
