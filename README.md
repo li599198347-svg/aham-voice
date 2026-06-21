@@ -9,11 +9,7 @@
 
 > **Aham 应用矩阵**：[Aham UI](https://github.com/li599198347-svg/aham-ui) · [Aham Survey](https://github.com/li599198347-svg/aham-survey) · **Aham Voice** · [Aham PPT](https://github.com/li599198347-svg/aham-ppt)
 
-## 关于
-
-> aham 系列 · 本地优先 · 自带 Key。（应用包与数据目录仍名 `AhamVoice`，为构建产物标识。）
-
-一个**单机 macOS 桌面应用**，开箱即用：
+一个**单机 macOS 桌面应用**，开箱即用——本地优先、自带 Key：
 
 - 录音 → 转写（FunASR paraformer + VAD + 标点）→ 说话人分离（CAM++）→ 声学情绪（emotion2vec），**全部本地离线**。
 - 会议纪要 + 情绪语义分析走**云端大模型**（OpenAI 兼容接口，比如 DeepSeek 等；在「设置」页填自己的 API Key，仅存本机，不回显明文）。
