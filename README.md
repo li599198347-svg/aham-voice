@@ -11,7 +11,7 @@
 一个**单机 macOS 桌面应用**，开箱即用：
 
 - 录音 → 转写（FunASR paraformer + VAD + 标点）→ 说话人分离（CAM++）→ 声学情绪（emotion2vec），**全部本地离线**。
-- 会议纪要 + 情绪语义分析走**云端 DeepSeek**（在「设置」页填自己的 API Key，仅存本机，不回显明文）。
+- 会议纪要 + 情绪语义分析走**云端大模型**（OpenAI 兼容接口，比如 DeepSeek 等；在「设置」页填自己的 API Key，仅存本机，不回显明文）。
 - 无登录、无多用户、无外部集成；热词在「热词」页手动增删，或用「**导入 txt**」批量导入。
 
 ## 关于 Aham
@@ -79,7 +79,7 @@ packaging/macos/build_app.sh # 打包成自包含 .app + DMG
 ```
 
 数据目录默认 `~/Library/Application Support/AhamVoice`（可用 `RECORDING_AI_HOME` 覆盖）；
-DeepSeek 配置存 `数据目录/config.json`。模型/ffmpeg 在打包时内置进 `.app`。
+大模型配置存 `数据目录/config.json`。模型/ffmpeg 在打包时内置进 `.app`。
 
 > **在另一台 Mac 从源码部署**（装模型/依赖/ffmpeg、跑起来、打包）见 [DEPLOY.md](DEPLOY.md)。
 
@@ -126,10 +126,10 @@ CRM
 | 路由 | 用途 |
 |---|---|
 | `GET /api/me` | 当前（固定本机）用户 |
-| `GET/PATCH /api/settings` | DeepSeek API Key / 模型 |
+| `GET/PATCH /api/settings` | 大模型 API Key / 模型 |
 | `GET/POST /api/recordings` | 录音列表 / 上传 |
 | `GET /api/recordings/{id}` | 录音详情（逐字稿/纪要/说话人/情绪） |
-| `POST /api/recordings/{id}/summarize` | DeepSeek 生成纪要 |
+| `POST /api/recordings/{id}/summarize` | 大模型生成纪要 |
 | `POST /api/recordings/{id}/summary/revise` | 按自然语言重写纪要 |
 | `POST /api/recordings/{id}/emotion` | 情绪语义分析 |
 | `GET/POST/PATCH/DELETE /api/hotwords` | 热词增删改查 |
