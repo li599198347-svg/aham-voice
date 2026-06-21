@@ -1,10 +1,15 @@
-# Aham Voice — 单机 macOS 录音转写与会议纪要
+# Aham Voice — 录音转写与会议纪要（macOS）
 
-[![License](https://img.shields.io/github/license/li599198347-svg/aham-voice)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/li599198347-svg/aham-voice)](https://github.com/li599198347-svg/aham-voice/releases/latest)
-[![CHANGELOG](https://img.shields.io/badge/changelog-Keep%20a%20Changelog-fe7d37)](CHANGELOG.md)
+[![Release](https://img.shields.io/github/v/release/li599198347-svg/aham-voice?color=336EE8)](https://github.com/li599198347-svg/aham-voice/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-336EE8.svg)](LICENSE)
+[![Design](https://img.shields.io/badge/Design-Aham%20UI%20v6.1-336EE8.svg)](https://github.com/li599198347-svg/aham-ui)
+[![Type](https://img.shields.io/badge/type-macOS%20App-336EE8.svg)](#)
 
 ![Aham Voice — 录音转写与会议纪要](assets/social-preview.png)
+
+> **Aham 应用矩阵**：[Aham UI](https://github.com/li599198347-svg/aham-ui) · [Aham Survey](https://github.com/li599198347-svg/aham-survey) · **Aham Voice** · [Aham PPT](https://github.com/li599198347-svg/aham-ppt)
+
+## 关于
 
 > aham 系列 · 本地优先 · 自带 Key。（应用包与数据目录仍名 `AhamVoice`，为构建产物标识。）
 
@@ -13,19 +18,6 @@
 - 录音 → 转写（FunASR paraformer + VAD + 标点）→ 说话人分离（CAM++）→ 声学情绪（emotion2vec），**全部本地离线**。
 - 会议纪要 + 情绪语义分析走**云端大模型**（OpenAI 兼容接口，比如 DeepSeek 等；在「设置」页填自己的 API Key，仅存本机，不回显明文）。
 - 无登录、无多用户、无外部集成；热词在「热词」页手动增删，或用「**导入 txt**」批量导入。
-
-## 关于 Aham
-
-> **把灵光一现，做成能用的 AI 工具。**
-
-Aham 来自 *aha moment*。每个工具只把一件事做利落。
-
-| 应用 | 一句话 |
-|---|---|
-| [Aham UI](https://github.com/li599198347-svg/aham-ui) | 供 AI 消费的设计系统——写一次规范，AI 产出处处一致 |
-| [Aham Survey](https://github.com/li599198347-svg/aham-survey) | 现场调研工具（macOS）——聊一圈，调研结果自己长出来 |
-| [Aham Voice](https://github.com/li599198347-svg/aham-voice) | 录音转写与会议纪要（macOS）——录一段会，纪要已经写好 |
-| [Aham PPT](https://github.com/li599198347-svg/aham-ppt) | 咨询级 AI PPT 制作技能——丢一堆素材，幻灯片出来了 |
 
 ## 预览
 
@@ -137,3 +129,22 @@ CRM
 | `GET/POST/PATCH /api/voiceprints` | 声纹管理 |
 
 完整路由见 `backend/app/main.py` 里的 `@app.` 装饰器。
+
+## 版本与许可
+
+- 版本与下载：[Releases](https://github.com/li599198347-svg/aham-voice/releases)
+- 变更记录：[CHANGELOG.md](CHANGELOG.md)（[Keep a Changelog](https://keepachangelog.com/zh-CN/) + [SemVer](https://semver.org/lang/zh-CN/)）
+- 许可：[MIT](LICENSE)
+
+## 关于 Aham
+
+> **把灵光一现，做成能用的 AI 工具。**
+
+Aham 来自 *aha moment*。每个工具只把一件事做利落。
+
+| 应用 | 一句话 |
+|---|---|
+| [Aham UI](https://github.com/li599198347-svg/aham-ui) | 供 AI 消费的设计系统——写一次规范，AI 产出处处一致 |
+| [Aham Survey](https://github.com/li599198347-svg/aham-survey) | 现场调研工具（macOS）——聊一圈，调研结果自己长出来 |
+| [Aham Voice](https://github.com/li599198347-svg/aham-voice) | 录音转写与会议纪要（macOS）——录一段会，纪要已经写好 |
+| [Aham PPT](https://github.com/li599198347-svg/aham-ppt) | 咨询级 AI PPT 制作技能——丢一堆素材，幻灯片出来了 |
