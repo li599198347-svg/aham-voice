@@ -7,15 +7,26 @@
 
 ![Aham Voice — 录音转写与会议纪要](assets/social-preview.png)
 
-> **Aham 应用矩阵**：[Aham UI](https://github.com/li599198347-svg/aham-ui) · [Aham Survey](https://github.com/li599198347-svg/aham-survey) · **Aham Voice** · [Aham PPT](https://github.com/li599198347-svg/aham-ppt)
+## 为什么做这个工具
+
+录音转写的工具不少，但大多是网页服务：音频要上传到别人的服务器，会议里谁说了什么、敏感的内容都过一遍云端，转写完往往也只给一段没分说话人、没结构的纯文本，纪要还得自己再整理。本地能离线跑的，又通常停在"出一段字"，说话人分离、情绪、成稿纪要各管各的。Aham Voice 想把这条链路在一台 Mac 上接完整：转写、说话人分离、声学情绪全部本地离线，只有最后成稿的纪要才交给你自己的大模型，音频和数据不离开本机。
+
+## 定位
+
+- **本地优先**：转写（FunASR paraformer + VAD + 标点）、说话人分离（CAM++）、声学情绪（emotion2vec）全部本地离线，音频不上传。
+- **自带 Key**：会议纪要与情绪语义分析走云端大模型，用你自己的 OpenAI 兼容接口（DeepSeek 等），Key 仅存本机、不回显明文。
+- **单机克制**：无登录、无多用户、无外部集成；一个自包含的 macOS 应用，装上就能用。
+- **一体成稿**：从录音到分说话人的逐句稿、再到结构化纪要，一条流水线走完，不用在几个工具间来回倒。
+
+简言之：一个把"录音 → 纪要"做利落的单机 Mac 应用，隐私留在本机，成稿交给你信任的模型。
+
+## 能做什么
 
 一个**单机 macOS 桌面应用**，开箱即用——本地优先、自带 Key：
 
 - 录音 → 转写（FunASR paraformer + VAD + 标点）→ 说话人分离（CAM++）→ 声学情绪（emotion2vec），**全部本地离线**。
 - 会议纪要 + 情绪语义分析走**云端大模型**（OpenAI 兼容接口，比如 DeepSeek 等；在「设置」页填自己的 API Key，仅存本机，不回显明文）。
 - 无登录、无多用户、无外部集成；热词在「热词」页手动增删，或用「**导入 txt**」批量导入。
-
-**🖥 项目主页 → <https://li599198347-svg.github.io/aham-voice/>**
 
 ## 预览
 
@@ -54,50 +65,17 @@
 cat AhamVoice-v2.0.0.dmg.* > "Aham Voice.dmg"
 ```
 
-双击 DMG → 拖 **Aham Voice** 到「应用程序」→ 首次运行解除隔离（见下文「打包」）→ 在「设置」页填 OpenAI 兼容 API Key 即可开箱使用。
+双击 DMG → 拖 **Aham Voice** 到「应用程序」→ 首次运行解除隔离 → 在「设置」页填 OpenAI 兼容 API Key 即可开箱使用。
 
-也可按 [DEPLOY.md](DEPLOY.md) 从源码构建运行。
-
-## 架构
-
-```
-app_launcher.py              # 桌面入口：起 uvicorn + pywebview 原生窗口
-backend/app/main.py          # FastAPI 单进程（单文件），同时提供 /api 与前端 dist
-frontend-src/                # 前端源码（React + Vite + TS + Tailwind v4 + Aham 设计系统）
-frontend/dist/               # 前端构建产物（被跟踪；单进程挂载 + SPA fallback）
-packaging/macos/build_app.sh # 打包成自包含 .app + DMG
-```
-
-数据目录默认 `~/Library/Application Support/AhamVoice`（可用 `RECORDING_AI_HOME` 覆盖）；
-大模型配置存 `数据目录/config.json`。模型/ffmpeg 在打包时内置进 `.app`。
-
-> **在另一台 Mac 从源码部署**（装模型/依赖/ffmpeg、跑起来、打包）见 [DEPLOY.md](DEPLOY.md)。
-
-## 本机开发（单进程）
-
-```bash
-cd frontend-src && npm install && npm run build    # 产出 ../frontend/dist
-cd .. && <venv-python> -m uvicorn backend.app.main:app --port 8765
-# 浏览器打开 http://127.0.0.1:8765    （端口别用 5173/5174）
-```
-
-改了 `frontend-src` 必须重新 `npm run build`（`frontend/dist` 是被跟踪的）。
-后端语法自检：`<venv-python> -m py_compile backend/app/main.py`。
-
-## 打包（出 .app + DMG）
-
-```bash
-bash packaging/macos/build_app.sh        # 约十几分钟，输出 ~/AhamVoice-build/
-```
-
-内置 CPython(arm64) + 全部依赖 + 5 个模型 + 静态化 ffmpeg，ad-hoc 签名。**仅 Apple Silicon**。
-装到别的 Mac 后首次运行需解除隔离：
+首次运行解除隔离（或右键 → 打开 → 再点「打开」）：
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/AhamVoice.app
 ```
 
-（或右键 → 打开 → 再点「打开」。）
+数据目录默认 `~/Library/Application Support/AhamVoice`（可用 `RECORDING_AI_HOME` 覆盖）；大模型配置存在 `数据目录/config.json`，模型与 ffmpeg 在打包时内置进 `.app`。
+
+也可按 [DEPLOY.md](DEPLOY.md) 从源码构建运行。
 
 ## 热词 txt 导入格式
 
@@ -126,26 +104,21 @@ CRM
 | `POST /api/hotwords/import` | 从 txt 批量导入热词 |
 | `GET/POST/PATCH /api/voiceprints` | 声纹管理 |
 
-完整路由见 `backend/app/main.py` 里的 `@app.` 装饰器。
-
-## 版本与许可
-
-- 版本与下载：[Releases](https://github.com/li599198347-svg/aham-voice/releases)
-- 变更记录：[CHANGELOG.md](CHANGELOG.md)（Keep a Changelog · SemVer）
-- 参与贡献：[CONTRIBUTING.md](CONTRIBUTING.md)
-- 许可：[MIT](LICENSE)
+完整路由见 `backend/app/main.py` 里的 `@app.` 装饰器。从源码构建、装模型/依赖/ffmpeg、打包成 `.app` + DMG 的完整流程见 [DEPLOY.md](DEPLOY.md)。
 
 ---
 
+## 更新记录
+
+[Releases](https://github.com/li599198347-svg/aham-voice/releases) · [CHANGELOG](CHANGELOG.md)（Keep a Changelog · SemVer） · [CONTRIBUTING](CONTRIBUTING.md) · [MIT](LICENSE)
+
 ## 关于 Aham
 
-> **把灵光一现，做成能用的 AI 工具。**
-
-Aham 来自 *aha moment*。每个工具只把一件事做利落。
+> 把灵光一现，做成能用的 AI 工具。Aham 来自 *aha moment*，每个工具只把一件事做利落。
 
 | 应用 | 一句话 |
 |---|---|
 | [Aham UI](https://github.com/li599198347-svg/aham-ui) | 供 AI 消费的设计系统——写一次规范，AI 产出处处一致 |
-| [Aham Survey](https://github.com/li599198347-svg/aham-survey) | 现场调研工具（macOS）——聊一圈，调研结果自己长出来 |
-| [Aham Voice](https://github.com/li599198347-svg/aham-voice) | 录音转写与会议纪要（macOS）——录一段会，纪要已经写好 |
-| [Aham PPT](https://github.com/li599198347-svg/aham-ppt) | 咨询级 AI PPT 制作技能——丢一堆素材，幻灯片出来了 |
+| [Aham Survey](https://github.com/li599198347-svg/aham-survey) | 现场调研工具（macOS）——本地优先，把现场对话做成结构化调研成果 |
+| **Aham Voice** | 录音转写与会议纪要（macOS）——本地离线转写，纪要走你自己的模型 |
+| [Aham PPT](https://github.com/li599198347-svg/aham-ppt) | 克制的 AI PPT 制作技能——把素材做成方案级 PPT |
